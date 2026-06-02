@@ -51,8 +51,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller httpx streamlit fastapi uvicorn
-          pip install -r requirements.txt
+          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging
 
       - name: Write VERSION
         run: |
@@ -92,8 +91,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller httpx streamlit fastapi uvicorn
-          pip install -r requirements.txt
+          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging
 
       - name: Write VERSION
         run: |
@@ -133,8 +131,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller httpx streamlit fastapi uvicorn
-          pip install -r requirements.txt
+          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging
 
       - name: Write VERSION
         run: |
@@ -179,8 +176,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install pyinstaller httpx streamlit fastapi uvicorn
-          pip install -r requirements.txt
+          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging
 
       - name: Write VERSION
         run: |
