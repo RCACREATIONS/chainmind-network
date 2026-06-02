@@ -284,3 +284,32 @@ jobs:
           git add release/latest.json
           git commit -m "chore: update release manifest to v${{ steps.ver.outputs.version }}" || echo "Nothing to commit"
           git push origin HEAD:main
+
+
+
+          release:
+  name: Create GitHub Release
+  needs: [build-windows, build-macos-x64, build-macos-arm64, build-linux]
+  runs-on: ubuntu-latest
+
+  permissions:
+    contents: write
+
+  steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: dist/
+
+    - name: List files (debug)
+      run: ls -R dist
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ github.ref_name }}
+        name: ChainMind Node ${{ github.ref_name }}
+        files: |
+          dist/**/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
