@@ -13,6 +13,16 @@ import sys
 from pathlib import Path
 import streamlit
 
+def _icon():
+    """Return icon path only if the file actually exists — avoids build crash."""
+    if sys.platform == "win32":
+        p = Path("assets/icon.ico")
+        return str(p) if p.exists() else None
+    elif sys.platform == "darwin":
+        p = Path("assets/icon.icns")
+        return str(p) if p.exists() else None
+    return None
+
 STREAMLIT_DIR = Path(streamlit.__file__).parent
 
 block_cipher = None
@@ -87,6 +97,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/icon.ico" if sys.platform == "win32" else (
-         "assets/icon.icns" if sys.platform == "darwin" else None),
+    icon=_icon(),
 )
