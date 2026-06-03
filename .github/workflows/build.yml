@@ -49,8 +49,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: |
-          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging plotly numpy requests pillow altair pydeck pyarrow
+        run: pip install pyinstaller -r requirements.txt
 
       - name: Write VERSION
         shell: pwsh
@@ -88,8 +87,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: |
-          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging plotly numpy requests pillow altair pydeck pyarrow
+        run: pip install pyinstaller -r requirements.txt
 
       - name: Write VERSION
         run: |
@@ -133,8 +131,7 @@ jobs:
           sudo apt-get install -y binutils
 
       - name: Install Python dependencies
-        run: |
-          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging plotly numpy requests pillow altair pydeck pyarrow
+        run: pip install pyinstaller -r requirements.txt
 
       - name: Write VERSION
         run: |
