@@ -331,36 +331,55 @@ def _create_desktop_shortcut() -> None:
     Create a 'ChainMind Node.lnk' shortcut on the Windows Desktop
     pointing to the running .exe. Safe to call every launch — skips
     if the shortcut already exists. No-op on macOS/Linux.
+
+    Uses PowerShell -EncodedCommand (base64-encoded UTF-16LE) so that
+    apostrophes or spaces in the Windows username / path never break the
+    PowerShell string parser (the original single-quoted approach failed
+    for usernames like "Miillyy's Gaming PC").
     """
     if sys.platform != "win32":
         return
 
     try:
-        exe_path = str(Path(sys.executable).resolve())
-        desktop  = os.path.join(os.path.expanduser("~"), "Desktop")
-        shortcut = os.path.join(desktop, "ChainMind Node.lnk")
+        import base64
+
+        exe_path  = str(Path(sys.executable).resolve())
+        work_dir  = str(Path(sys.executable).parent.resolve())
+        desktop   = os.path.join(os.path.expanduser("~"), "Desktop")
+        shortcut  = os.path.join(desktop, "ChainMind Node.lnk")
 
         if os.path.exists(shortcut):
             return
 
-        ps_script = (
-            "$ws = New-Object -ComObject WScript.Shell; "
-            f"$sc = $ws.CreateShortcut('{shortcut}'); "
-            f"$sc.TargetPath = '{exe_path}'; "
-            f"$sc.WorkingDirectory = '{os.path.dirname(exe_path)}'; "
-            "$sc.Description = 'ChainMind Network Node'; "
-            f"$sc.IconLocation = '{exe_path},0'; "
-            "$sc.Save()"
-        )
+        # Build the script with double-quoted PS strings (safe for apostrophes).
+        # Backslashes in paths are fine inside double-quoted PS strings.
+        # We then base64-encode the whole thing as UTF-16LE so PowerShell's
+        # argument parser never sees any special characters at all.
+        ps_lines = [
+            "$ws = New-Object -ComObject WScript.Shell",
+            f'$sc = $ws.CreateShortcut("{shortcut}")',
+            f'$sc.TargetPath = "{exe_path}"',
+            f'$sc.WorkingDirectory = "{work_dir}"',
+            '$sc.Description = "ChainMind Network Node"',
+            f'$sc.IconLocation = "{exe_path},0"',
+            "$sc.Save()",
+        ]
+        ps_script = "; ".join(ps_lines)
+
+        # PowerShell -EncodedCommand expects UTF-16LE base64
+        encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-EncodedCommand", encoded],
             capture_output=True,
             timeout=10,
         )
         if result.returncode == 0:
             print(f"{GREEN}  ✔ Desktop shortcut created{RESET}")
         else:
-            print(f"{YELLOW}  Desktop shortcut: {result.stderr.decode(errors='replace').strip()}{RESET}")
+            err = result.stderr.decode(errors="replace").strip()
+            print(f"{YELLOW}  Desktop shortcut: {err}{RESET}")
     except Exception as e:
         print(f"{YELLOW}  Desktop shortcut failed: {e}{RESET}")
 
