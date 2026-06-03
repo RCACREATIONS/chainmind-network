@@ -46,8 +46,13 @@ LOG_DIR.mkdir(exist_ok=True)
 if str(BUNDLE_DIR) not in sys.path:
     sys.path.insert(0, str(BUNDLE_DIR))
 
+# Tell every subprocess exactly where config.yaml lives so they don't have
+# to guess — avoids the _MEIPASS vs install-dir confusion.
+os.environ["CHAINMIND_CONFIG"] = str(INSTALL_DIR / "config.yaml")
+
 os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "true")
+os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,10 +103,11 @@ def _run_dashboard_mode(port: int = 8501):
     from streamlit.web import cli as stcli
     sys.argv = [
         "streamlit", "run", dash_path,
-        "--server.port",    str(port),
-        "--server.headless", "true",
-        "--server.address",  "localhost",
-        "--browser.gatherUsageStats", "false",
+        "--server.port",             str(port),
+        "--server.headless",         "true",
+        "--server.address",          "localhost",
+        "--browser.gatherUsageStats","false",
+        "--global.developmentMode",  "false",
     ]
     stcli.main()
 

@@ -54,9 +54,12 @@ async def require_auth(
     raise HTTPException(status_code=401, detail="Invalid or missing node API token")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# In a frozen PyInstaller exe, __file__ points inside the _MEIPASS temp dir —
-# config.yaml lives next to the .exe in the install dir, not in _MEIPASS.
-if getattr(_sys, "frozen", False):
+# Launcher sets CHAINMIND_CONFIG so every subprocess finds the same config.yaml.
+# Fallback: next to the .exe (frozen) or repo root (dev).
+import os as _os
+if _os.environ.get("CHAINMIND_CONFIG"):
+    _cfg_path = Path(_os.environ["CHAINMIND_CONFIG"])
+elif getattr(_sys, "frozen", False):
     _cfg_path = Path(_sys.executable).parent / "config.yaml"
 else:
     _cfg_path = Path(__file__).parent.parent / "config.yaml"
