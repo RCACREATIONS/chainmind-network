@@ -63,17 +63,25 @@ def _fetch_stats(node_port: int) -> dict:
     """Fetch node stats from the FastAPI server."""
     try:
         import httpx
+        import time as _time
         base  = f"http://localhost:{node_port}"
         stats = httpx.get(f"{base}/stats", timeout=2).json()
         rep   = stats.get("reputation", {})
+
+        # Compute uptime from DB-stored start timestamp
+        uptime_start = stats.get("uptime_start", 0)
+        uptime_secs  = int(_time.time() - uptime_start) if uptime_start else 0
+
         return {
             "online":  True,
             "peers":   stats.get("peers_online", 0),
             "jobs":    stats.get("total_tasks", stats.get("jobs_done", 0)),
             "tokens":  stats.get("total_tokens", 0),
-            "iq":      float(rep.get("iq_earned", 0.0)),
+            # Read IQ directly from node_stats (persisted after every job),
+            # fall back to reputation sub-dict if the top-level key is absent.
+            "iq":      float(stats.get("iq_earned", rep.get("iq_earned", 0.0))),
             "tier":    rep.get("tier", "nano"),
-            "uptime":  rep.get("uptime_seconds", 0),
+            "uptime":  uptime_secs,
         }
     except Exception:
         return {"online": False}

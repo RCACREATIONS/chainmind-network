@@ -661,6 +661,19 @@ def _console_wait_loop(node_proc_ref: list, cfg: dict):
 # 10.  Main
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
+    # ── Windows taskbar & shortcut icon ────────────────────────────────────────
+    # Must be called before ANY window (Tk or console) is created.
+    # Without this, Windows groups the running process under a generic app ID
+    # and ignores the shortcut's IconLocation, showing a white file icon instead.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "ChainMind.Node"
+            )
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(description="ChainMind Node")
     parser.add_argument("--update",       action="store_true", help="Force update check")
     parser.add_argument("--no-dashboard", action="store_true", help="Run node API only")
