@@ -7,11 +7,13 @@
 #   - chainmind_launcher.py  (entry point)
 #   - All node/* Python source
 #   - Streamlit static files (frozen quirk)
+#   - Streamlit + other package dist-info (so importlib.metadata works)
 #   - VERSION file
 
 import sys
 from pathlib import Path
 import streamlit
+from PyInstaller.utils.hooks import copy_metadata, collect_data_files
 
 def _icon():
     """Return icon path only if the file actually exists — avoids build crash."""
@@ -24,6 +26,32 @@ def _icon():
     return None
 
 STREAMLIT_DIR = Path(streamlit.__file__).parent
+
+# ── Package metadata (dist-info) that must survive into the frozen bundle ──
+# Streamlit reads its own version via importlib.metadata at import time.
+# Without these, you get: PackageNotFoundError: No package metadata for streamlit
+metadata_datas = []
+for pkg in [
+    "streamlit",
+    "altair",
+    "pydeck",
+    "pyarrow",
+    "pandas",
+    "httpx",
+    "fastapi",
+    "uvicorn",
+    "click",
+    "rich",
+    "packaging",
+    "gitpython",
+    "tenacity",
+    "toml",
+    "validators",
+]:
+    try:
+        metadata_datas += copy_metadata(pkg)
+    except Exception:
+        pass   # package not installed — skip silently
 
 block_cipher = None
 
@@ -40,30 +68,45 @@ a = Analysis(
         ("node",                              "node"),
         # Version marker
         ("VERSION",                           "."),
-    ],
+    ] + metadata_datas,
     hiddenimports=[
         "streamlit",
         "streamlit.web",
         "streamlit.web.cli",
+        "streamlit.web.server",
+        "streamlit.web.server.server",
         "streamlit.runtime",
         "streamlit.runtime.scriptrunner",
+        "streamlit.runtime.scriptrunner.magic_funcs",
+        "streamlit.runtime.state",
+        "streamlit.runtime.uploaded_file_manager",
+        "streamlit.components.v1",
         "altair",
         "pydeck",
         "pyarrow",
         "pandas",
         "httpx",
+        "httpx._transports",
+        "httpx._transports.default",
         "fastapi",
+        "fastapi.middleware",
+        "fastapi.middleware.cors",
         "uvicorn",
         "uvicorn.logging",
         "uvicorn.loops",
         "uvicorn.loops.auto",
+        "uvicorn.loops.asyncio",
         "uvicorn.protocols",
         "uvicorn.protocols.http",
         "uvicorn.protocols.http.auto",
+        "uvicorn.protocols.http.h11_impl",
         "uvicorn.protocols.websockets",
         "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan",
         "uvicorn.lifespan.on",
+        "importlib.metadata",
+        "importlib_metadata",
+        "pkg_resources",
     ],
     hookspath=[],
     hooksconfig={},
