@@ -50,7 +50,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging
+          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging plotly numpy requests pillow altair pydeck pyarrow
 
       - name: Write VERSION
         shell: pwsh
@@ -89,7 +89,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging
+          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging plotly numpy requests pillow altair pydeck pyarrow
 
       - name: Write VERSION
         run: |
@@ -134,7 +134,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging
+          pip install pyinstaller httpx "streamlit>=1.33.0" "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" pyyaml packaging plotly numpy requests pillow altair pydeck pyarrow
 
       - name: Write VERSION
         run: |
