@@ -59,28 +59,83 @@ def _get_version(assets: Path) -> str:
     return "1.0.0"
 
 
-def _fetch_stats(node_port: int) -> dict:
-    """Fetch node stats from the FastAPI server."""
+def _load_api_token(cfg: dict) -> str:
+    """Read the node API token from config. Returns empty string if not set."""
+    return cfg.get("node", {}).get("api_token", "") if cfg else ""
+
+
+def _fetch_stats(node_port: int, api_token: str = "") -> dict:
+    """
+    Fetch node stats, merging three sources in priority order:
+      1. /stats           — local DB: uptime, tier (always available)
+      2. /account/earnings — central server: authoritative IQ, jobs, tokens
+      3. /network/central_peers — central server: accurate peers-online count
+    Falls back to local DB values if the central endpoints fail or time out.
+    """
     try:
         import httpx
         import time as _time
-        base  = f"http://localhost:{node_port}"
-        stats = httpx.get(f"{base}/stats", timeout=2).json()
+
+        base    = f"http://localhost:{node_port}"
+        auth    = {"Authorization": f"Bearer {api_token}"} if api_token else {}
+        client  = httpx.Client(timeout=3)
+
+        # ── 1. Local stats (always fetched) ──────────────────────────────────
+        stats = client.get(f"{base}/stats", headers=auth).json()
         rep   = stats.get("reputation", {})
 
-        # Compute uptime from DB-stored start timestamp
         uptime_start = stats.get("uptime_start", 0)
         uptime_secs  = int(_time.time() - uptime_start) if uptime_start else 0
 
+        # Local fallbacks
+        iq_val     = float(stats.get("iq_earned", rep.get("iq_earned", 0.0)))
+        jobs_val   = stats.get("total_tasks", stats.get("jobs_done", 0))
+        tokens_val = stats.get("total_tokens", 0)
+        peers_val  = stats.get("peers_online", 0)
+        tier_val   = rep.get("tier", "nano")
+
+        # ── 2. Central earnings (IQ, jobs, tokens) ───────────────────────────
+        try:
+            earn_data = client.get(f"{base}/account/earnings", headers=auth).json()
+            earn = earn_data.get("earnings", earn_data) or {}
+            # Central server may use various field names — try all common ones
+            central_iq = (
+                earn.get("iq_earned") or earn.get("total_iq") or
+                earn.get("iq") or earn.get("earnings")
+            )
+            central_jobs = (
+                earn.get("jobs_done") or earn.get("total_tasks") or
+                earn.get("tasks_completed") or earn.get("total_jobs")
+            )
+            central_tokens = (
+                earn.get("tokens_earned") or earn.get("total_tokens") or
+                earn.get("tokens")
+            )
+            if central_iq     is not None: iq_val     = float(central_iq)
+            if central_jobs   is not None: jobs_val   = int(central_jobs)
+            if central_tokens is not None: tokens_val = int(central_tokens)
+        except Exception:
+            pass  # central server unreachable — keep local values
+
+        # ── 3. Central peers count ────────────────────────────────────────────
+        try:
+            cp = client.get(f"{base}/network/central_peers", timeout=3).json()
+            # Response is a list of peers OR a dict with a "peers" key
+            peer_list = cp if isinstance(cp, list) else cp.get("peers", [])
+            if peer_list:
+                peers_val = len(peer_list)
+        except Exception:
+            pass  # keep local peers_online value
+
+        client.close()
+
         return {
             "online":  True,
-            "peers":   stats.get("peers_online", 0),
-            "jobs":    stats.get("total_tasks", stats.get("jobs_done", 0)),
-            "tokens":  stats.get("total_tokens", 0),
-            # Read IQ directly from node_stats (persisted after every job),
-            # fall back to reputation sub-dict if the top-level key is absent.
-            "iq":      float(stats.get("iq_earned", rep.get("iq_earned", 0.0))),
-            "tier":    rep.get("tier", "nano"),
+            "peers":   peers_val,
+            "jobs":    jobs_val,
+            "tokens":  tokens_val,
+            "iq":      iq_val,
+            "tier":    tier_val,
             "uptime":  uptime_secs,
         }
     except Exception:
@@ -122,6 +177,7 @@ class ChainMindGUI:
         self._stop_all  = stop_all_cb
         self._node_port = cfg.get("node",      {}).get("port", 8000)
         self._dash_port = cfg.get("dashboard", {}).get("port", 8501)
+        self._api_token = _load_api_token(cfg)
         self._assets    = _resolve_assets()
         self._log_dir   = _resolve_log_dir()
         self._destroyed = False
@@ -301,7 +357,7 @@ class ChainMindGUI:
         self._root.after(self.POLL_MS, self._schedule_poll)
 
     def _bg_fetch(self):
-        stats = _fetch_stats(self._node_port)
+        stats = _fetch_stats(self._node_port, self._api_token)
         if self._destroyed:
             return
         try:

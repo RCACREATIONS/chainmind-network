@@ -175,6 +175,14 @@ class CentralClient:
             await asyncio.sleep(self.poll_ivl)
 
     async def _poll_once(self):
+        # Do not claim jobs if Ollama is not reachable — avoids "All connection
+        # attempts failed" errors being sent back to the central server as failures.
+        ollama_ok = await self.ollama.is_running()
+        if not ollama_ok:
+            log.warning("Ollama not reachable — skipping job claim until it's back up")
+            await asyncio.sleep(15)
+            return
+
         r = await self._http.get(f"{self.base_url}/api/node/claim-job.php")
 
         # ===== PATCH 1: CREDIT HANDLING =====

@@ -289,6 +289,71 @@ def _ensure_ollama() -> bool:
     return bool(sh.which("ollama"))
 
 
+def _ensure_ollama_running(cfg: dict) -> None:
+    """
+    If Ollama is installed but not responding on its port, show a clear prompt
+    and wait up to 90 s for it to start. Works in both GUI (Tk dialog) and
+    headless (console) mode.  Does NOT block the launch — just warns and waits.
+    """
+    ollama_port = cfg.get("ollama", {}).get("port", 11434)
+    ollama_host = cfg.get("ollama", {}).get("host", "http://localhost").rstrip("/")
+    check_url   = f"{ollama_host}:{ollama_port}/api/tags"
+
+    def _is_up() -> bool:
+        try:
+            import httpx
+            r = httpx.get(check_url, timeout=2)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    if _is_up():
+        print(f"{GREEN}  ✔ Ollama is running on port {ollama_port}{RESET}")
+        return
+
+    # ── Ollama not responding ──────────────────────────────────────────────────
+    print(f"\n{YELLOW}  ⚠  Ollama is not running (checked {check_url}).{RESET}")
+    print(f"{YELLOW}     ChainMind needs Ollama to process AI jobs.{RESET}")
+    print(f"{CYAN}     ➜  Start Ollama, then the node will proceed automatically.{RESET}")
+    print(f"{CYAN}     ➜  Download: https://ollama.ai/download{RESET}\n")
+
+    # Try to show a Tk dialog if we're on a desktop session
+    _shown_dialog = False
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        _root = tk.Tk()
+        _root.withdraw()
+        _root.attributes("-topmost", True)
+        messagebox.showwarning(
+            "Ollama Not Running — ChainMind",
+            f"Ollama is not running on port {ollama_port}.\n\n"
+            "ChainMind needs Ollama to process AI jobs.\n\n"
+            "Please start Ollama, then click OK — the node will\n"
+            "keep waiting until Ollama is ready (up to 90 seconds).\n\n"
+            "Download Ollama: https://ollama.ai/download",
+        )
+        _root.destroy()
+        _shown_dialog = True
+    except Exception:
+        pass  # headless / no display — console message already printed above
+
+    # Wait up to 90 s for Ollama to come up, checking every 3 s
+    wait_secs = 90
+    interval  = 3
+    for attempt in range(wait_secs // interval):
+        if _is_up():
+            print(f"{GREEN}  ✔ Ollama is now running — continuing.{RESET}\n")
+            return
+        remaining = wait_secs - attempt * interval
+        print(f"\r{YELLOW}  Waiting for Ollama… {remaining}s remaining{RESET}    ", end="", flush=True)
+        time.sleep(interval)
+
+    print(f"\n{YELLOW}  ⚠  Ollama still not detected — starting node anyway.{RESET}")
+    print(f"{YELLOW}     Jobs will be skipped until Ollama is available.{RESET}\n")
+
+
 def _download_ollama():
     import tempfile, subprocess as sp
     url = OLLAMA_URLS.get(sys.platform)
@@ -738,6 +803,7 @@ def main():
     ).start()
 
     _ensure_ollama()
+    _ensure_ollama_running(cfg)
 
     signal.signal(signal.SIGINT,  _on_exit)
     signal.signal(signal.SIGTERM, _on_exit)
