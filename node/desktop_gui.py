@@ -3,27 +3,15 @@ node/desktop_gui.py
 ===================
 ChainMind Node — Native Desktop GUI (tkinter)
 
-A lightweight, always-on-top-optional control panel that lives alongside
-the system tray.  Shows live node status, stats and logs, and gives the
-user one-click access to all common actions.
-
-Launch via:
-    python chainmind_launcher.py          (default: GUI + tray + dashboard)
-    python chainmind_launcher.py --no-gui (headless / tray-only)
+White + purple theme matching the Streamlit dashboard.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
-import time
 import webbrowser
 from pathlib import Path
-from tkinter import (
-    BooleanVar, Canvas, Frame, Label, Scrollbar, StringVar,
-    Text, Tk, Toplevel, ttk, PhotoImage,
-)
 import tkinter as tk
 
 try:
@@ -32,37 +20,49 @@ try:
 except ImportError:
     PIL_OK = False
 
-# ── Palette (matches dashboard CSS) ──────────────────────────────────────────
-C_BG        = "#1a1030"   # very dark purple-black
-C_PANEL     = "#231840"   # slightly lighter panel
-C_ACCENT    = "#7c3aed"   # purple
-C_ACCENT2   = "#6d28d9"   # darker purple
-C_ACCENT_LT = "#a78bfa"   # light purple text
-C_GREEN     = "#10b981"   # online green
-C_RED       = "#ef4444"   # error red
-C_YELLOW    = "#f59e0b"   # warning
-C_TEXT      = "#f5f3ff"   # near-white
-C_MUTED     = "#a78bfa"   # muted purple
-C_BORDER    = "#3b2f6e"   # border
+C_BG         = "#ffffff"
+C_PANEL      = "#f5f3ff"
+C_PANEL2     = "#ede9fe"
+C_ACCENT     = "#7c3aed"
+C_ACCENT_HOV = "#6d28d9"
+C_BORDER     = "#ddd6fe"
+C_TEXT       = "#1e1b4b"
+C_MUTED      = "#6d28d9"
+C_GREEN      = "#059669"
+C_RED        = "#dc2626"
+C_LOG_BG     = "#faf5ff"
+C_LOG_FG     = "#4c1d95"
 
 
 def _resolve_assets() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS) / "assets"
-    return Path(__file__).parent.parent / "assets"
+    here = Path(__file__).parent
+    for c in [here.parent / "assets", here / "assets"]:
+        if c.exists():
+            return c
+    return here.parent / "assets"
 
 
 def _resolve_log_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "data" / "logs"
-    return Path(__file__).parent.parent / "data" / "logs"
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) \
+        else Path(__file__).parent.parent
+    return base / "data" / "logs"
 
 
-# ── Stat polling via node HTTP API ───────────────────────────────────────────
+def _get_version(assets: Path) -> str:
+    for p in [assets.parent / "VERSION"]:
+        try:
+            return p.resolve().read_text().strip()
+        except Exception:
+            pass
+    return "1.0.0"
+
+
 def _fetch_stats(node_port: int) -> dict:
     try:
         import httpx
-        base = f"http://localhost:{node_port}"
+        base   = f"http://localhost:{node_port}"
         stats  = httpx.get(f"{base}/stats",   timeout=2).json()
         net    = httpx.get(f"{base}/network", timeout=2).json()
         system = httpx.get(f"{base}/system",  timeout=2).json()
@@ -70,7 +70,7 @@ def _fetch_stats(node_port: int) -> dict:
             "online": True,
             "peers":  net.get("online_peers", 0),
             "jobs":   stats.get("jobs_done", 0),
-            "iq":     stats.get("reputation", {}).get("iq_earned", 0.0),
+            "iq":     float(stats.get("reputation", {}).get("iq_earned", 0.0)),
             "tier":   stats.get("reputation", {}).get("tier", "nano"),
             "uptime": system.get("uptime_seconds", 0),
             "ram_gb": system.get("hardware", {}).get("ram_gb", "?"),
@@ -94,53 +94,48 @@ def _fmt_uptime(seconds) -> str:
         return "—"
 
 
-def _tail_log(log_path: Path, n: int = 30) -> str:
+def _tail_log(log_path: Path, n: int = 35) -> str:
     try:
         with open(log_path, "rb") as f:
             f.seek(0, 2)
             size = f.tell()
-            chunk = min(8192, size)
-            f.seek(max(0, size - chunk))
+            f.seek(max(0, size - 12288))
             raw = f.read().decode("utf-8", errors="replace")
-        lines = raw.splitlines()
-        return "\n".join(lines[-n:])
+        return "\n".join(raw.splitlines()[-n:])
     except Exception:
         return "(no log yet)"
 
 
-# ── Main GUI class ────────────────────────────────────────────────────────────
 class ChainMindGUI:
-    POLL_INTERVAL = 5_000  # ms
+    POLL_MS = 5000
 
     def __init__(self, cfg: dict, node_proc_ref: list, stop_all_cb):
-        self._cfg          = cfg
-        self._node_ref     = node_proc_ref
-        self._stop_all     = stop_all_cb
-        self._node_port    = cfg.get("node",      {}).get("port",  8000)
-        self._dash_port    = cfg.get("dashboard", {}).get("port",  8501)
-        self._assets       = _resolve_assets()
-        self._log_dir      = _resolve_log_dir()
-        self._destroyed    = False
+        self._cfg       = cfg
+        self._node_ref  = node_proc_ref
+        self._stop_all  = stop_all_cb
+        self._node_port = cfg.get("node",      {}).get("port", 8000)
+        self._dash_port = cfg.get("dashboard", {}).get("port", 8501)
+        self._assets    = _resolve_assets()
+        self._log_dir   = _resolve_log_dir()
+        self._destroyed = False
+        self._version   = _get_version(self._assets)
 
-        self._root = Tk()
+        self._root = tk.Tk()
         self._root.title("ChainMind Node")
         self._root.configure(bg=C_BG)
         self._root.resizable(True, True)
-        self._root.minsize(520, 600)
-        self._root.geometry("580x700")
+        self._root.minsize(540, 620)
+        self._root.geometry("600x720")
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Window icon
         self._load_window_icon()
-
         self._build_ui()
-        self._poll()
+        self._root.after(400, self._schedule_poll)
 
-    # ── Icon ─────────────────────────────────────────────────────────────────
     def _load_window_icon(self):
-        ico = self._assets / "icon.ico"
-        png = self._assets / "icon.png"
         try:
+            ico = self._assets / "icon.ico"
+            png = self._assets / "icon.png"
             if ico.exists() and sys.platform == "win32":
                 self._root.iconbitmap(str(ico))
             elif png.exists() and PIL_OK:
@@ -150,127 +145,131 @@ class ChainMindGUI:
         except Exception:
             pass
 
-    # ── UI construction ───────────────────────────────────────────────────────
     def _build_ui(self):
-        root = self._root
+        r = self._root
 
-        # ── Header ───────────────────────────────────────────────────────────
-        hdr = Frame(root, bg=C_PANEL, pady=16)
+        # ── Header ────────────────────────────────────────────────────────────
+        hdr = tk.Frame(r, bg=C_PANEL)
         hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C_ACCENT, height=3).pack(fill="x")
 
-        # Logo
+        hdr_body = tk.Frame(hdr, bg=C_PANEL)
+        hdr_body.pack(fill="x", padx=16, pady=10)
+
         logo_path = self._assets / "icon.png"
         if logo_path.exists() and PIL_OK:
             try:
-                img = Image.open(logo_path).resize((52, 52), Image.LANCZOS)
+                img = Image.open(logo_path).resize((48, 48), Image.LANCZOS)
                 self._logo_photo = ImageTk.PhotoImage(img)
-                Label(hdr, image=self._logo_photo, bg=C_PANEL).pack(side="left", padx=(18, 10))
+                lbl = tk.Label(hdr_body, image=self._logo_photo, bg=C_PANEL)
+                lbl.pack(side="left")
+                tk.Frame(hdr_body, width=12, bg=C_PANEL).pack(side="left")
             except Exception:
                 pass
 
-        title_frame = Frame(hdr, bg=C_PANEL)
-        title_frame.pack(side="left", fill="y", pady=4)
-        Label(title_frame, text="ChainMind Node", font=("Segoe UI", 18, "bold"),
-              fg=C_TEXT, bg=C_PANEL).pack(anchor="w")
+        title_col = tk.Frame(hdr_body, bg=C_PANEL)
+        title_col.pack(side="left", fill="y")
+        tk.Label(title_col, text="ChainMind Node",
+                 font=("Segoe UI", 17, "bold"),
+                 fg=C_TEXT, bg=C_PANEL).pack(anchor="w")
+        tk.Label(title_col,
+                 text=f"v{self._version}  ·  Decentralised AI Network",
+                 font=("Segoe UI", 9), fg=C_MUTED, bg=C_PANEL).pack(anchor="w")
 
-        ver_file = (self._assets.parent / "VERSION")
-        version  = ver_file.read_text().strip() if ver_file.exists() else "1.0.0"
-        Label(title_frame, text=f"v{version}  ·  Decentralised AI Network",
-              font=("Segoe UI", 10), fg=C_MUTED, bg=C_PANEL).pack(anchor="w")
+        status_col = tk.Frame(hdr_body, bg=C_PANEL)
+        status_col.pack(side="right")
+        self._dot_canvas = tk.Canvas(status_col, width=12, height=12,
+                                     bg=C_PANEL, highlightthickness=0)
+        self._dot_canvas.pack(side="left")
+        self._dot_id = self._dot_canvas.create_oval(1, 1, 11, 11,
+                                                    fill="#94a3b8", outline="")
+        tk.Frame(status_col, width=6, bg=C_PANEL).pack(side="left")
+        self._status_var = tk.StringVar(value="Starting…")
+        tk.Label(status_col, textvariable=self._status_var,
+                 font=("Segoe UI", 10, "bold"),
+                 fg=C_TEXT, bg=C_PANEL).pack(side="left")
 
-        # Status dot + label (right side)
-        status_fr = Frame(hdr, bg=C_PANEL)
-        status_fr.pack(side="right", padx=18)
-        self._dot_canvas = Canvas(status_fr, width=14, height=14, bg=C_PANEL,
-                                  highlightthickness=0)
-        self._dot_canvas.pack(side="left", padx=(0, 6))
-        self._dot_id = self._dot_canvas.create_oval(2, 2, 12, 12, fill=C_RED, outline="")
-        self._status_var = StringVar(value="Connecting…")
-        Label(status_fr, textvariable=self._status_var,
-              font=("Segoe UI", 10, "bold"), fg=C_TEXT, bg=C_PANEL).pack(side="left")
+        tk.Frame(hdr, bg=C_BORDER, height=1).pack(fill="x")
 
-        # ── Action buttons row ────────────────────────────────────────────────
-        btn_frame = Frame(root, bg=C_BG, pady=12, padx=14)
-        btn_frame.pack(fill="x")
+        # ── Buttons ───────────────────────────────────────────────────────────
+        btn_row = tk.Frame(r, bg=C_BG)
+        btn_row.pack(fill="x", padx=16, pady=10)
 
-        btn_cfg = dict(font=("Segoe UI", 10, "bold"), bd=0, padx=14, pady=8,
-                       cursor="hand2", activeforeground=C_TEXT)
+        for text, cmd, bg, fg in [
+            ("🌐  Open Dashboard",  self._open_dashboard, C_ACCENT,  "#ffffff"),
+            ("🔄  Restart Node",    self._restart_node,   C_PANEL2,  C_MUTED),
+            ("⬆  Check Updates",   self._check_updates,  C_PANEL2,  C_MUTED),
+            ("✕  Quit",            self._quit,           "#fee2e2",  "#991b1b"),
+        ]:
+            tk.Button(btn_row, text=text, command=cmd,
+                      bg=bg, fg=fg,
+                      activebackground=C_ACCENT_HOV, activeforeground="#ffffff",
+                      font=("Segoe UI", 9, "bold"),
+                      relief="flat", bd=0,
+                      padx=12, pady=6,
+                      cursor="hand2").pack(side="left", padx=3)
 
-        self._open_dash_btn = tk.Button(
-            btn_frame, text="🌐  Open Dashboard",
-            bg=C_ACCENT, fg=C_TEXT, activebackground=C_ACCENT2,
-            command=self._open_dashboard, **btn_cfg)
-        self._open_dash_btn.pack(side="left", padx=(0, 8))
+        # ── Stats grid ────────────────────────────────────────────────────────
+        grid_frame = tk.Frame(r, bg=C_BG)
+        grid_frame.pack(fill="x", padx=16, pady=2)
 
-        tk.Button(
-            btn_frame, text="🔄  Restart Node",
-            bg=C_PANEL, fg=C_TEXT, activebackground=C_BORDER,
-            command=self._restart_node, **btn_cfg).pack(side="left", padx=(0, 8))
-
-        tk.Button(
-            btn_frame, text="⬆  Check Updates",
-            bg=C_PANEL, fg=C_TEXT, activebackground=C_BORDER,
-            command=self._check_updates, **btn_cfg).pack(side="left", padx=(0, 8))
-
-        tk.Button(
-            btn_frame, text="✕  Quit",
-            bg="#3b1d1d", fg="#fca5a5", activebackground="#5f2020",
-            command=self._quit, **btn_cfg).pack(side="right")
-
-        # ── Stats grid ───────────────────────────────────────────────────────
-        stats_outer = Frame(root, bg=C_BG, padx=14)
-        stats_outer.pack(fill="x")
-
-        self._stat_vars: dict[str, StringVar] = {}
+        self._stat_vars: dict[str, tk.StringVar] = {}
         fields = [
-            ("Peers Online",  "peers",  "0"),
-            ("IQ Earned",     "iq",     "0.0000"),
-            ("Jobs Done",     "jobs",   "0"),
-            ("Uptime",        "uptime", "—"),
-            ("Node Tier",     "tier",   "—"),
-            ("RAM",           "ram",    "—"),
+            ("Peers Online", "peers",  "—"),
+            ("IQ Earned",    "iq",     "—"),
+            ("Jobs Done",    "jobs",   "—"),
+            ("Uptime",       "uptime", "—"),
+            ("Node Tier",    "tier",   "—"),
+            ("Hardware",     "ram",    "—"),
         ]
-        stats_grid = Frame(stats_outer, bg=C_BG)
-        stats_grid.pack(fill="x", pady=(0, 6))
-
         for idx, (label, key, default) in enumerate(fields):
             col = idx % 3
             row = idx // 3
-            card = Frame(stats_grid, bg=C_PANEL, padx=14, pady=12,
-                         highlightthickness=1, highlightbackground=C_BORDER)
-            card.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
-            stats_grid.columnconfigure(col, weight=1)
+            card = tk.Frame(grid_frame, bg=C_PANEL,
+                            highlightthickness=1,
+                            highlightbackground=C_BORDER)
+            card.grid(row=row, column=col, padx=3, pady=3, sticky="nsew")
+            grid_frame.columnconfigure(col, weight=1)
 
-            Label(card, text=label, font=("Segoe UI", 9),
-                  fg=C_MUTED, bg=C_PANEL).pack(anchor="w")
-            var = StringVar(value=default)
+            tk.Label(card, text=label,
+                     font=("Segoe UI", 8), fg=C_MUTED,
+                     bg=C_PANEL).pack(anchor="w", padx=10, pady=4)
+            var = tk.StringVar(value=default)
             self._stat_vars[key] = var
-            Label(card, textvariable=var, font=("Segoe UI", 16, "bold"),
-                  fg=C_TEXT, bg=C_PANEL).pack(anchor="w")
+            tk.Label(card, textvariable=var,
+                     font=("Segoe UI", 15, "bold"),
+                     fg=C_TEXT, bg=C_PANEL).pack(anchor="w", padx=10, pady=4)
 
-        # ── Node log tail ─────────────────────────────────────────────────────
-        log_hdr = Frame(root, bg=C_BG, padx=14, pady=(6, 0))
-        log_hdr.pack(fill="x")
-        Label(log_hdr, text="Node Log", font=("Segoe UI", 10, "bold"),
-              fg=C_ACCENT_LT, bg=C_BG).pack(side="left")
-        tk.Button(log_hdr, text="⟳ Refresh", font=("Segoe UI", 8),
-                  bg=C_PANEL, fg=C_MUTED, bd=0, padx=8, pady=4,
-                  activebackground=C_BORDER, cursor="hand2",
-                  command=self._refresh_log).pack(side="right")
+        # ── Log ───────────────────────────────────────────────────────────────
+        log_hdr = tk.Frame(r, bg=C_BG)
+        log_hdr.pack(fill="x", padx=16, pady=4)
+        tk.Label(log_hdr, text="Node Log",
+                 font=("Segoe UI", 10, "bold"),
+                 fg=C_MUTED, bg=C_BG).pack(side="left")
+        tk.Button(log_hdr, text="↻ Refresh",
+                  command=self._refresh_log,
+                  bg=C_PANEL2, fg=C_MUTED,
+                  font=("Segoe UI", 8), relief="flat", bd=0,
+                  padx=8, pady=3,
+                  cursor="hand2").pack(side="right")
 
-        log_frame = Frame(root, bg=C_BG, padx=14, pady=6)
-        log_frame.pack(fill="both", expand=True)
+        log_wrap = tk.Frame(r, bg=C_BG)
+        log_wrap.pack(fill="both", expand=True, padx=16, pady=3)
 
-        self._log_text = Text(
-            log_frame, bg="#110d23", fg="#c4b5fd",
-            font=("Consolas", 8), wrap="none",
-            relief="flat", bd=0, state="disabled",
-            insertbackground=C_TEXT,
+        self._log_text = tk.Text(
+            log_wrap,
+            bg=C_LOG_BG, fg=C_LOG_FG,
+            font=("Consolas", 8),
+            wrap="none",
+            relief="flat", bd=0,
+            state="disabled",
+            highlightbackground=C_BORDER,
+            highlightthickness=1,
         )
-        sb_y = Scrollbar(log_frame, orient="vertical",
-                         command=self._log_text.yview)
-        sb_x = Scrollbar(log_frame, orient="horizontal",
-                         command=self._log_text.xview)
+        sb_y = tk.Scrollbar(log_wrap, orient="vertical",
+                            command=self._log_text.yview)
+        sb_x = tk.Scrollbar(log_wrap, orient="horizontal",
+                            command=self._log_text.xview)
         self._log_text.configure(yscrollcommand=sb_y.set,
                                  xscrollcommand=sb_x.set)
         sb_y.pack(side="right", fill="y")
@@ -278,24 +277,30 @@ class ChainMindGUI:
         self._log_text.pack(side="left", fill="both", expand=True)
 
         # ── Footer ────────────────────────────────────────────────────────────
-        footer = Frame(root, bg=C_PANEL, pady=8)
-        footer.pack(fill="x", side="bottom")
-        Label(footer,
-              text=f"Dashboard → http://localhost:{self._dash_port}",
-              font=("Segoe UI", 9), fg=C_MUTED, bg=C_PANEL).pack()
+        tk.Frame(r, bg=C_BORDER, height=1).pack(fill="x")
+        footer = tk.Frame(r, bg=C_PANEL)
+        footer.pack(fill="x")
+        tk.Label(footer,
+                 text=f"Dashboard  →  http://localhost:{self._dash_port}",
+                 font=("Segoe UI", 8), fg=C_MUTED,
+                 bg=C_PANEL).pack(pady=5)
 
     # ── Polling ───────────────────────────────────────────────────────────────
-    def _poll(self):
+    def _schedule_poll(self):
         if self._destroyed:
             return
-        threading.Thread(target=self._fetch_and_update, daemon=True).start()
-        self._root.after(self.POLL_INTERVAL, self._poll)
+        threading.Thread(target=self._bg_fetch, daemon=True).start()
+        self._root.after(self.POLL_MS, self._schedule_poll)
 
-    def _fetch_and_update(self):
+    def _bg_fetch(self):
         stats = _fetch_stats(self._node_port)
-        if not self._destroyed:
-            self._root.after(0, lambda: self._apply_stats(stats))
+        if self._destroyed:
+            return
+        try:
+            self._root.after(0, lambda s=stats: self._apply_stats(s))
             self._root.after(0, self._refresh_log)
+        except Exception:
+            pass
 
     def _apply_stats(self, s: dict):
         if self._destroyed:
@@ -304,33 +309,29 @@ class ChainMindGUI:
         self._dot_canvas.itemconfigure(
             self._dot_id, fill=C_GREEN if online else C_RED)
         self._status_var.set("Running" if online else "Offline")
-
         if online:
             self._stat_vars["peers"].set(str(s.get("peers", 0)))
-            self._stat_vars["iq"].set(f"{float(s.get('iq', 0)):.4f} IQ")
+            self._stat_vars["iq"].set(f"{s.get('iq', 0.0):.4f} IQ")
             self._stat_vars["jobs"].set(str(s.get("jobs", 0)))
             self._stat_vars["uptime"].set(_fmt_uptime(s.get("uptime", 0)))
             self._stat_vars["tier"].set(str(s.get("tier", "—")).upper())
-            ram = s.get("ram_gb", "?")
-            cpu = s.get("cpu", "?")
-            self._stat_vars["ram"].set(f"{ram} GB / {cpu} cores")
-        else:
-            for k in ["peers", "iq", "jobs", "uptime", "tier", "ram"]:
-                if self._stat_vars[k].get() not in ("—", "0", "0.0000"):
-                    pass  # keep last value while temporarily offline
+            self._stat_vars["ram"].set(
+                f"{s.get('ram_gb', '?')} GB / {s.get('cpu', '?')} cores")
 
     def _refresh_log(self):
         if self._destroyed:
             return
-        log_file = self._log_dir / "node.log"
-        text     = _tail_log(log_file)
-        self._log_text.configure(state="normal")
-        self._log_text.delete("1.0", "end")
-        self._log_text.insert("end", text)
-        self._log_text.see("end")
-        self._log_text.configure(state="disabled")
+        text = _tail_log(self._log_dir / "node.log")
+        try:
+            self._log_text.configure(state="normal")
+            self._log_text.delete("1.0", "end")
+            self._log_text.insert("end", text)
+            self._log_text.see("end")
+            self._log_text.configure(state="disabled")
+        except Exception:
+            pass
 
-    # ── Button actions ────────────────────────────────────────────────────────
+    # ── Actions ───────────────────────────────────────────────────────────────
     def _open_dashboard(self):
         webbrowser.open(f"http://localhost:{self._dash_port}")
 
@@ -341,12 +342,10 @@ class ChainMindGUI:
                 p.terminate()
             except Exception:
                 pass
-        # The launcher's monitor thread will respawn it
 
     def _check_updates(self):
-        import subprocess
         threading.Thread(
-            target=lambda: subprocess.run(
+            target=lambda: __import__("subprocess").run(
                 [sys.executable, "--update"], check=False),
             daemon=True,
         ).start()
@@ -355,17 +354,15 @@ class ChainMindGUI:
         self._stop_all()
 
     def _on_close(self):
-        # Closing the window just hides it (it lives in the tray)
         self._root.withdraw()
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # ── Public ────────────────────────────────────────────────────────────────
     def show(self):
         self._root.deiconify()
         self._root.lift()
         self._root.focus_force()
 
     def run(self):
-        """Block — call from the main thread."""
         self._root.mainloop()
         self._destroyed = True
 
