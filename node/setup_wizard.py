@@ -263,6 +263,12 @@ def maybe_run_wizard() -> dict:
     if os.environ.get("CHAINMIND_SETUP") == "1":
         needs_setup = True
 
+    # --no-setup / CHAINMIND_NO_SETUP: always skip wizard when a config file
+    # already exists (used by the desktop shortcut so a returning user is never
+    # dropped back into the setup wizard just because the node name looks default).
+    if os.environ.get("CHAINMIND_NO_SETUP") == "1" and _cfg_path.exists():
+        needs_setup = False
+
     if needs_setup:
         cfg = run_wizard(cfg)
         # Save updated config

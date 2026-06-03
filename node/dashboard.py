@@ -26,9 +26,21 @@ with open(_cfg_path) as f:
 
 NODE_URL = f"http://localhost:{CFG['node']['port']}"
 
+# Resolve the favicon PNG from assets/ (works frozen + plain Python)
+import os as _iconos, sys as _iconsys
+_favicon_path: str | None = None
+for _candidate in [
+    _iconos.path.join(getattr(_iconsys, "_MEIPASS", ""), "assets", "favicon.png"),
+    _iconos.path.join(_iconos.path.dirname(_iconos.path.abspath(__file__)),
+                      "..", "assets", "favicon.png"),
+]:
+    if _iconos.path.exists(_candidate):
+        _favicon_path = _candidate
+        break
+
 st.set_page_config(
     page_title="ChainMind Network",
-    page_icon="🔮",
+    page_icon=_favicon_path or "🔮",
     layout="wide",
     initial_sidebar_state="expanded",
 )

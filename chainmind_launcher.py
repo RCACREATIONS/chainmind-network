@@ -325,6 +325,17 @@ def _download_ollama():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6.  Desktop shortcut
+
+
+def _get_ico_path() -> str:
+    """Return path to icon.ico for use in shortcuts/taskbar. Falls back to exe."""
+    for candidate in [
+        BUNDLE_DIR  / "assets" / "icon.ico",
+        INSTALL_DIR / "assets" / "icon.ico",
+    ]:
+        if candidate.exists():
+            return str(candidate.resolve())
+    return str(Path(sys.executable).resolve())
 # ─────────────────────────────────────────────────────────────────────────────
 def _create_desktop_shortcut() -> None:
     """
@@ -355,13 +366,19 @@ def _create_desktop_shortcut() -> None:
         # Backslashes in paths are fine inside double-quoted PS strings.
         # We then base64-encode the whole thing as UTF-16LE so PowerShell's
         # argument parser never sees any special characters at all.
+        # Pass --no-setup so the shortcut never re-fires the wizard,
+        # and set CHAINMIND_CONFIG via an env var wrapper argument so the
+        # node always finds the pre-configured config.yaml regardless of cwd.
+        cfg_path_arg = str(INSTALL_DIR / "config.yaml")
+
         ps_lines = [
             "$ws = New-Object -ComObject WScript.Shell",
             f'$sc = $ws.CreateShortcut("{shortcut}")',
             f'$sc.TargetPath = "{exe_path}"',
+            f'$sc.Arguments = "--no-setup"',
             f'$sc.WorkingDirectory = "{work_dir}"',
             '$sc.Description = "ChainMind Network Node"',
-            f'$sc.IconLocation = "{exe_path},0"',
+            f'$sc.IconLocation = "{_get_ico_path()},0"',
             "$sc.Save()",
         ]
         ps_script = "; ".join(ps_lines)
@@ -502,36 +519,44 @@ def _on_exit(*_):
 # 9.  System tray icon
 # ─────────────────────────────────────────────────────────────────────────────
 def _make_tray_icon_image():
-    """Create a purple ChainMind logo as a PIL Image for the tray."""
+    """Load the ChainMind logo for the system tray."""
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image
     except ImportError:
         return None
 
-    size = 64
-    img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    # Prefer the pre-built tray PNG in the assets folder
+    candidates = [
+        BUNDLE_DIR  / "assets" / "tray.png",
+        INSTALL_DIR / "assets" / "tray.png",
+        BUNDLE_DIR  / "assets" / "icon.png",
+        INSTALL_DIR / "assets" / "icon.png",
+    ]
+    for path in candidates:
+        if path.exists():
+            try:
+                img = Image.open(path).convert("RGBA").resize((64, 64))
+                return img
+            except Exception:
+                continue
 
-    # Purple circle background
-    draw.ellipse([2, 2, size - 2, size - 2], fill=(124, 58, 237, 255))
-
-    # White "C" letter — use default font (always available)
-    text = "C"
+    # Absolute fallback: purple circle with "CM"
     try:
-        # Try to get a decent size with the default bitmap font
-        from PIL import ImageFont
-        font = ImageFont.load_default()
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw   = bbox[2] - bbox[0]
-        th   = bbox[3] - bbox[1]
-        tx   = (size - tw) // 2
-        ty   = (size - th) // 2
-        draw.text((tx, ty), text, fill=(255, 255, 255, 255), font=font)
+        from PIL import ImageDraw
+        size = 64
+        img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([2, 2, size - 2, size - 2], fill=(124, 58, 237, 255))
+        font = None
+        try:
+            from PIL import ImageFont
+            font = ImageFont.load_default()
+        except Exception:
+            pass
+        draw.text((18, 22), "CM", fill=(255, 255, 255, 255), font=font)
+        return img
     except Exception:
-        # Absolute fallback: just a white dot in the centre
-        draw.ellipse([26, 26, 38, 38], fill=(255, 255, 255, 255))
-
-    return img
+        return None
 
 
 def _run_tray(cfg: dict, node_proc_ref: list, no_dashboard: bool):
@@ -641,6 +666,9 @@ def main():
     parser.add_argument("--no-dashboard", action="store_true", help="Run node API only")
     parser.add_argument("--no-browser",   action="store_true", help="Don't open browser")
     parser.add_argument("--no-tray",      action="store_true", help="Disable system tray")
+    parser.add_argument("--no-gui",       action="store_true", help="Disable desktop GUI window")
+    parser.add_argument("--no-setup",      action="store_true",
+                        help="Skip setup wizard even if config looks default")
     parser.add_argument("--setup",        action="store_true", help="Re-run setup wizard")
     args = parser.parse_args()
 
@@ -652,6 +680,8 @@ def main():
 
     if args.setup:
         os.environ["CHAINMIND_SETUP"] = "1"
+    if args.no_setup:
+        os.environ["CHAINMIND_NO_SETUP"] = "1"
     from node.setup_wizard import maybe_run_wizard
     cfg = maybe_run_wizard()
 
@@ -707,10 +737,36 @@ def main():
     if not args.no_dashboard:
         _launch_dashboard(cfg, open_browser=not args.no_browser)
 
+    # ── Desktop GUI window (optional, default ON) ─────────────────────────────
+    _gui = None
+    if not args.no_gui and not args.no_browser:
+        try:
+            from node.desktop_gui import ChainMindGUI
+            _gui = ChainMindGUI(cfg, node_proc_ref, _on_exit)
+        except Exception as _gui_err:
+            print(f"{YELLOW}  Desktop GUI unavailable: {_gui_err}{RESET}")
+
+    # Patch tray's "Open Dashboard" to also show the GUI window
+    def _open_gui_from_tray():
+        if _gui is not None:
+            _gui.show()
+
     if args.no_tray:
-        _console_wait_loop(node_proc_ref, cfg)
+        if _gui is not None:
+            _gui.run()   # blocks; GUI is the main window
+        else:
+            _console_wait_loop(node_proc_ref, cfg)
     else:
-        _run_tray(cfg, node_proc_ref, args.no_dashboard)
+        if _gui is not None:
+            # Run tray in a background thread; GUI mainloop owns the main thread
+            threading.Thread(
+                target=_run_tray,
+                args=(cfg, node_proc_ref, args.no_dashboard),
+                daemon=True,
+            ).start()
+            _gui.run()
+        else:
+            _run_tray(cfg, node_proc_ref, args.no_dashboard)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

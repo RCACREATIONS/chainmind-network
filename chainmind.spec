@@ -65,6 +65,8 @@ a = Analysis(
         (str(STREAMLIT_DIR / "runtime"), "streamlit/runtime"),
         (str(STREAMLIT_DIR / "web"),     "streamlit/web"),
         ("node",                         "node"),
+        # Brand assets: icon.ico, icon.png, tray.png, favicon.png
+        ("assets",                       "assets"),
         # Default config with full models catalog — copied to install dir on first run
         ("config.yaml",                  "."),
         ("VERSION",                      "."),
@@ -150,5 +152,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=_icon(),
+    icon=_icon() or (str(Path('assets/icon.ico')) if Path('assets/icon.ico').exists() else None),
 )
