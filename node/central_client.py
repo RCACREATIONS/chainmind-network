@@ -268,15 +268,25 @@ class CentralClient:
                 self._iq_earned += iq_delta
                 self._reputation = max(0, min(1000, self._reputation + rep_delta))
 
-                # ===== PATCH 2: IQ LOGGING =====
+                # Persist server-confirmed IQ/jobs to local DB so they survive restarts.
+                # Without this the local node_stats.iq_earned never reflects central IQ.
+                try:
+                    import time as _time
+                    self.con.execute(
+                        "UPDATE node_stats SET total_tasks=?, iq_earned=?, last_heartbeat=? WHERE id=1",
+                        (self._jobs_done, round(self._iq_earned, 6), _time.time()),
+                    )
+                    self.con.commit()
+                except Exception as _db_err:
+                    log.debug(f"Could not persist IQ to DB: {_db_err}")
+
                 if iq_delta > 0:
                     log.info(
-                        f"IQ earned: +{iq_delta:.6f}  |  session total: {self._iq_earned:.6f}  "
+                        f"IQ earned: +{iq_delta:.6f}  |  total: {self._iq_earned:.6f}  "
                         f"|  view earnings: {self.base_url}/dashboard/node-earnings.php"
                     )
                 else:
                     log.debug(f"Result accepted — IQ +{iq_delta:.4f}, rep {rep_delta:+.1f}")
-                # =================================
 
             else:
                 log.warning(f"submit-result returned {r.status_code}: {r.text[:200]}")

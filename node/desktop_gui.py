@@ -60,21 +60,20 @@ def _get_version(assets: Path) -> str:
 
 
 def _fetch_stats(node_port: int) -> dict:
+    """Fetch node stats from the FastAPI server."""
     try:
         import httpx
-        base   = f"http://localhost:{node_port}"
-        stats  = httpx.get(f"{base}/stats",   timeout=2).json()
-        net    = httpx.get(f"{base}/network", timeout=2).json()
-        system = httpx.get(f"{base}/system",  timeout=2).json()
+        base  = f"http://localhost:{node_port}"
+        stats = httpx.get(f"{base}/stats", timeout=2).json()
+        rep   = stats.get("reputation", {})
         return {
-            "online": True,
-            "peers":  net.get("online_peers", 0),
-            "jobs":   stats.get("jobs_done", 0),
-            "iq":     float(stats.get("reputation", {}).get("iq_earned", 0.0)),
-            "tier":   stats.get("reputation", {}).get("tier", "nano"),
-            "uptime": system.get("uptime_seconds", 0),
-            "ram_gb": system.get("hardware", {}).get("ram_gb", "?"),
-            "cpu":    system.get("hardware", {}).get("cpu_cores", "?"),
+            "online":  True,
+            "peers":   stats.get("peers_online", 0),
+            "jobs":    stats.get("total_tasks", stats.get("jobs_done", 0)),
+            "tokens":  stats.get("total_tokens", 0),
+            "iq":      float(rep.get("iq_earned", 0.0)),
+            "tier":    rep.get("tier", "nano"),
+            "uptime":  rep.get("uptime_seconds", 0),
         }
     except Exception:
         return {"online": False}
@@ -163,12 +162,12 @@ class ChainMindGUI:
                 self._logo_photo = ImageTk.PhotoImage(img)
                 lbl = tk.Label(hdr_body, image=self._logo_photo, bg=C_PANEL)
                 lbl.pack(side="left")
-                tk.Frame(hdr_body, width=12, bg=C_PANEL).pack(side="left")
+                # spacer via padx on next widget, NOT a width=N Frame (avoids "N 0" screen distance)
             except Exception:
                 pass
 
         title_col = tk.Frame(hdr_body, bg=C_PANEL)
-        title_col.pack(side="left", fill="y")
+        title_col.pack(side="left", fill="y", padx=10)
         tk.Label(title_col, text="ChainMind Node",
                  font=("Segoe UI", 17, "bold"),
                  fg=C_TEXT, bg=C_PANEL).pack(anchor="w")
@@ -183,15 +182,18 @@ class ChainMindGUI:
         self._dot_canvas.pack(side="left")
         self._dot_id = self._dot_canvas.create_oval(1, 1, 11, 11,
                                                     fill="#94a3b8", outline="")
-        tk.Frame(status_col, width=6, bg=C_PANEL).pack(side="left")
+        # Status label — padx=4 left adds the gap that the old width=6 Frame provided
         self._status_var = tk.StringVar(value="Starting…")
         tk.Label(status_col, textvariable=self._status_var,
                  font=("Segoe UI", 10, "bold"),
-                 fg=C_TEXT, bg=C_PANEL).pack(side="left")
+                 fg=C_TEXT, bg=C_PANEL).pack(side="left", padx=4)
 
         tk.Frame(hdr, bg=C_BORDER, height=1).pack(fill="x")
 
         # ── Buttons ───────────────────────────────────────────────────────────
+        # IMPORTANT: never pass padx=/pady= to Button() constructor — on some
+        # Windows Tk versions the pair (pady, bd=0) gets stringified as "6 0"
+        # causing "bad screen distance" crash.  Use ipadx/ipady in pack() instead.
         btn_row = tk.Frame(r, bg=C_BG)
         btn_row.pack(fill="x", padx=16, pady=10)
 
@@ -206,8 +208,7 @@ class ChainMindGUI:
                       activebackground=C_ACCENT_HOV, activeforeground="#ffffff",
                       font=("Segoe UI", 9, "bold"),
                       relief="flat", bd=0,
-                      padx=12, pady=6,
-                      cursor="hand2").pack(side="left", padx=3)
+                      cursor="hand2").pack(side="left", padx=3, ipadx=10, ipady=5)
 
         # ── Stats grid ────────────────────────────────────────────────────────
         grid_frame = tk.Frame(r, bg=C_BG)
@@ -220,7 +221,7 @@ class ChainMindGUI:
             ("Jobs Done",    "jobs",   "—"),
             ("Uptime",       "uptime", "—"),
             ("Node Tier",    "tier",   "—"),
-            ("Hardware",     "ram",    "—"),
+            ("Tokens",       "tokens", "—"),
         ]
         for idx, (label, key, default) in enumerate(fields):
             col = idx % 3
@@ -250,8 +251,7 @@ class ChainMindGUI:
                   command=self._refresh_log,
                   bg=C_PANEL2, fg=C_MUTED,
                   font=("Segoe UI", 8), relief="flat", bd=0,
-                  padx=8, pady=3,
-                  cursor="hand2").pack(side="right")
+                  cursor="hand2").pack(side="right", ipadx=6, ipady=2)
 
         log_wrap = tk.Frame(r, bg=C_BG)
         log_wrap.pack(fill="both", expand=True, padx=16, pady=3)
@@ -311,12 +311,11 @@ class ChainMindGUI:
         self._status_var.set("Running" if online else "Offline")
         if online:
             self._stat_vars["peers"].set(str(s.get("peers", 0)))
-            self._stat_vars["iq"].set(f"{s.get('iq', 0.0):.4f} IQ")
+            self._stat_vars["iq"].set(f"{s.get('iq', 0.0):.4f}")
             self._stat_vars["jobs"].set(str(s.get("jobs", 0)))
+            self._stat_vars["tokens"].set(str(s.get("tokens", 0)))
             self._stat_vars["uptime"].set(_fmt_uptime(s.get("uptime", 0)))
             self._stat_vars["tier"].set(str(s.get("tier", "—")).upper())
-            self._stat_vars["ram"].set(
-                f"{s.get('ram_gb', '?')} GB / {s.get('cpu', '?')} cores")
 
     def _refresh_log(self):
         if self._destroyed:
