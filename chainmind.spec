@@ -8,6 +8,7 @@
 #   - All node/* Python source
 #   - Streamlit static files (frozen quirk)
 #   - Streamlit + other package dist-info (so importlib.metadata works)
+#   - config.yaml (default template — always has all keys incl. models)
 #   - VERSION file
 
 import sys
@@ -55,6 +56,7 @@ for pkg in [
     "attrs",
     "toolz",
     "jinja2",
+    "psutil",
 ]:
     try:
         metadata_datas += copy_metadata(pkg)
@@ -74,10 +76,18 @@ a = Analysis(
         (str(STREAMLIT_DIR / "web"),          "streamlit/web"),
         # Your node package
         ("node",                              "node"),
+        # Default config template — bundles all keys so the wizard can always
+        # deep-merge against a full template (includes the models catalog).
+        ("config.yaml",                       "."),
         # Version marker
         ("VERSION",                           "."),
     ] + metadata_datas,
     hiddenimports=[
+        # psutil — needed for RAM/CPU/disk detection in system_check.py
+        "psutil",
+        "psutil._pswindows",
+        "psutil._pslinux",
+        "psutil._psosx",
         "streamlit",
         "streamlit.web",
         "streamlit.web.cli",

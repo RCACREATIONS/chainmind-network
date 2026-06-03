@@ -7,12 +7,20 @@ import time
 from pathlib import Path
 
 import httpx
+import os as _os
+import sys as _sys
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
-_cfg_path = Path(__file__).parent.parent / "config.yaml"
+if _os.environ.get("CHAINMIND_CONFIG"):
+    _cfg_path = Path(_os.environ["CHAINMIND_CONFIG"])
+elif getattr(_sys, "frozen", False):
+    _cfg_path = Path(_sys.executable).parent / "config.yaml"
+else:
+    _cfg_path = Path(__file__).parent.parent / "config.yaml"
+
 with open(_cfg_path) as f:
     CFG = yaml.safe_load(f)
 

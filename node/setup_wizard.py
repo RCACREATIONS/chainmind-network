@@ -15,7 +15,95 @@ from typing import Optional
 
 import yaml
 
-_cfg_path = Path(__file__).parent.parent / "config.yaml"
+# ── Config path — works both frozen (PyInstaller) and plain Python ──────────
+if os.environ.get("CHAINMIND_CONFIG"):
+    _cfg_path = Path(os.environ["CHAINMIND_CONFIG"])
+elif getattr(sys, "frozen", False):
+    _cfg_path = Path(sys.executable).parent / "config.yaml"
+else:
+    _cfg_path = Path(__file__).parent.parent / "config.yaml"
+
+# Full default config — always written so ALL keys exist after first run.
+# Users edit config.yaml; the wizard only overrides what it asks about.
+_DEFAULT_CONFIG: dict = {
+    "node": {
+        "name": "chainmind-node-1",
+        "host": "0.0.0.0",
+        "port": 8000,
+        "api_token": "",
+        "public_url": "",
+    },
+    "network": {
+        "heartbeat_interval": 30,
+        "discovery_interval": 60,
+        "max_peers": 50,
+        "bootstrap_peers": [],
+    },
+    "ollama": {
+        "host": "http://localhost",
+        "port": 11434,
+    },
+    "dashboard": {
+        "port": 8501,
+    },
+    "database": {
+        "path": "data/node.db",
+    },
+    "tokens": {
+        "base_rate": 0.001,
+        "tier_multipliers": {
+            "nano": 1,
+            "micro": 3,
+            "standard": 8,
+            "pro": 20,
+            "enterprise": 50,
+        },
+    },
+    "central": {
+        "enabled": True,
+        "url": "https://chainmind.com.ng",
+        "node_secret": "",
+        "poll_interval": 3,
+        "heartbeat_interval": 30,
+    },
+    "privacy": {
+        "encrypt_tasks": True,
+        "mask_prompts_in_dashboard": True,
+    },
+    "models": {
+        "tiny": [
+            {"name": "qwen2:0.5b",  "label": "Qwen2 0.5B — Fastest, any machine", "ram_gb": 1.0, "disk_gb": 0.4},
+            {"name": "tinyllama",   "label": "TinyLlama 1.1B — Good for low-RAM",   "ram_gb": 2.0, "disk_gb": 0.6},
+            {"name": "phi3:mini",   "label": "Phi-3 Mini 3.8B — Best tiny quality", "ram_gb": 4.0, "disk_gb": 2.3},
+        ],
+        "small": [
+            {"name": "llama3.2:1b", "label": "Llama3.2 1B — Very fast",                  "ram_gb": 2.0, "disk_gb": 1.3},
+            {"name": "llama3.2:3b", "label": "Llama3.2 3B — Recommended for 8GB RAM",    "ram_gb": 4.0, "disk_gb": 2.0},
+            {"name": "gemma2:2b",   "label": "Gemma2 2B — Google's small model",          "ram_gb": 4.0, "disk_gb": 1.6},
+        ],
+        "medium": [
+            {"name": "mistral",      "label": "Mistral 7B — Best balance",                   "ram_gb": 8.0,  "disk_gb": 4.1},
+            {"name": "llama3.1:8b",  "label": "Llama3.1 8B — Recommended for 16GB RAM",      "ram_gb": 10.0, "disk_gb": 4.7},
+            {"name": "gemma2:9b",    "label": "Gemma2 9B — Google's medium model",            "ram_gb": 12.0, "disk_gb": 5.4},
+        ],
+        "large": [
+            {"name": "llama3.1:70b", "label": "Llama3.1 70B — Server-grade only",   "ram_gb": 48.0, "disk_gb": 40.0},
+            {"name": "mixtral:8x7b", "label": "Mixtral 8x7B — Expert mixture",       "ram_gb": 32.0, "disk_gb": 26.0},
+            {"name": "qwen2:72b",    "label": "Qwen2 72B — Maximum quality",          "ram_gb": 48.0, "disk_gb": 41.0},
+        ],
+    },
+}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Merge override into base recursively. Base keys not in override are kept."""
+    result = dict(base)
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
 
 
 def _prompt(msg: str, default: str = "", required: bool = True) -> str:
@@ -109,6 +197,7 @@ def run_wizard(cfg: dict) -> dict:
     print(f"     Central server: {central_url}")
     enabled = _prompt_yn("     Connect to central server (recommended)?", default=True)
     central_cfg["enabled"] = enabled
+    central_cfg["url"] = central_url
 
     if enabled:
         secret = central_cfg.get("node_secret", "")
@@ -154,11 +243,15 @@ def run_wizard(cfg: dict) -> dict:
 
 def maybe_run_wizard() -> dict:
     """Load config.yaml; run wizard if node.name is the generic default or missing."""
-    if not _cfg_path.exists():
-        cfg: dict = {}
-    else:
+    if _cfg_path.exists():
         with open(_cfg_path) as f:
-            cfg = yaml.safe_load(f) or {}
+            saved = yaml.safe_load(f) or {}
+    else:
+        saved = {}
+
+    # Always deep-merge with defaults so new config keys are present even on
+    # existing installs that were created by an older wizard version.
+    cfg = _deep_merge(_DEFAULT_CONFIG, saved)
 
     node_name = cfg.get("node", {}).get("name", "")
     needs_setup = (
@@ -174,7 +267,7 @@ def maybe_run_wizard() -> dict:
         cfg = run_wizard(cfg)
         # Save updated config
         with open(_cfg_path, "w") as f:
-            yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
+            yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     return cfg
 

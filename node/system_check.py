@@ -86,11 +86,13 @@ def get_tier_for_system(info: dict[str, Any]) -> str:
 
 
 def filter_models_for_system(catalog: dict, info: dict) -> dict:
-    """Return only models that fit in the system's available RAM."""
+    """Return models from the catalog annotated with fits/reason for this system."""
     ram = info.get("ram_gb", 4.0)
     gpu_vram = info.get("gpu_vram_gb", 0.0)
-    # Effective memory = GPU VRAM if present, else 60% of RAM (leave headroom)
-    effective_gb = gpu_vram if gpu_vram > 0 else ram * 0.6
+    # Use GPU VRAM if present, otherwise use the full system RAM.
+    # (The old 60% headroom was too aggressive and caused models to show as
+    #  incompatible on machines that can actually run them fine.)
+    effective_gb = gpu_vram if gpu_vram > 0 else ram
     disk_free = info.get("disk_free_gb", 10.0)
 
     compatible: dict = {}
@@ -102,9 +104,12 @@ def filter_models_for_system(catalog: dict, info: dict) -> dict:
             if model_ram <= effective_gb and model_disk <= disk_free:
                 good.append({**m, "fits": True})
             else:
-                # Still show it but mark as incompatible
-                good.append({**m, "fits": False,
-                             "reason": f"Needs {model_ram}GB RAM, you have {effective_gb:.1f}GB available"})
+                reason = (
+                    f"Needs {model_ram}GB RAM (you have {effective_gb:.1f}GB)"
+                    if model_ram > effective_gb
+                    else f"Needs {model_disk}GB disk (you have {disk_free:.1f}GB free)"
+                )
+                good.append({**m, "fits": False, "reason": reason})
         if good:
             compatible[size_tier] = good
     return compatible
