@@ -403,6 +403,39 @@ def main():
     from node.setup_wizard import maybe_run_wizard
     cfg = maybe_run_wizard()
 
+    # ── Frozen-mode config relocation ──────────────────────────────────────────
+    # setup_wizard.py uses Path(__file__).parent.parent to find the save location,
+    # which in a frozen exe resolves to _MEIPASS (temp dir), NOT the install dir.
+    # After the wizard runs, copy config.yaml from wherever it was written to
+    # INSTALL_DIR so all subprocesses (pointed via CHAINMIND_CONFIG) find it.
+    if getattr(sys, "frozen", False):
+        import shutil as _shutil
+        import yaml as _yaml
+        install_cfg = INSTALL_DIR / "config.yaml"
+        # Where the wizard likely saved it (relative to __file__ in frozen mode)
+        bundle_cfg  = BUNDLE_DIR / "config.yaml"
+        if not install_cfg.exists():
+            if bundle_cfg.exists():
+                _shutil.copy2(str(bundle_cfg), str(install_cfg))
+            else:
+                # Last resort: walk up from BUNDLE_DIR looking for config.yaml
+                for candidate in [
+                    BUNDLE_DIR.parent / "config.yaml",
+                    Path(sys.executable).parent / "config.yaml",
+                ]:
+                    if candidate.exists() and candidate != install_cfg:
+                        _shutil.copy2(str(candidate), str(install_cfg))
+                        break
+                else:
+                    # Config still missing — write it from the dict the wizard returned
+                    if cfg:
+                        with open(install_cfg, "w") as _f:
+                            _yaml.dump(cfg, _f, default_flow_style=False)
+        # Re-read cfg from the canonical location so it's always consistent
+        if install_cfg.exists():
+            with open(install_cfg) as _f:
+                cfg = _yaml.safe_load(_f) or cfg
+
     threading.Thread(
         target=_check_updates_bg,
         args=(args.update,),
