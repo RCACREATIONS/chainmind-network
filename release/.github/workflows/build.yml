@@ -1,0 +1,239 @@
+# .github/workflows/build.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# ChainMind Node — Cross-platform release builder
+#
+# Triggers on:
+#   • Push of a version tag:  git tag v1.2.3 && git push --tags
+#   • Manual run from the Actions tab (workflow_dispatch)
+#
+# Produces:
+#   • ChainMind-Node-windows-x64.exe
+#   • ChainMind-Node-macos-arm64.zip  (Apple Silicon — all modern Macs)
+#   • ChainMind-Node-linux-x64
+#   • release/latest.json             (update manifest — committed back to repo)
+#
+# After a successful build the workflow:
+#   1. Uploads all binaries as GitHub Release assets
+#   2. Updates release/latest.json with checksums + asset URLs
+#   3. Commits and pushes latest.json so the GitHub raw mirror stays live
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 1.2.3 — no 'v' prefix)"
+        required: true
+        default: "0.0.0"
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ── Windows x64 ─────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pyinstaller -r requirements.txt
+
+      - name: Write VERSION
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $ver = "${{ github.event.inputs.version }}"
+          }
+          Set-Content -Path VERSION -Value $ver -NoNewline
+
+      - name: Build EXE
+        run: pyinstaller chainmind.spec --clean --noconfirm
+
+      - name: Rename artifact
+        shell: pwsh
+        run: Move-Item dist\ChainMind-Node.exe dist\ChainMind-Node-windows-x64.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/ChainMind-Node-windows-x64.exe
+
+  # ── macOS arm64 (Apple Silicon — all modern Macs since 2020) ────────────────
+  build-macos-arm64:
+    name: macOS arm64 (Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pyinstaller -r requirements.txt
+
+      - name: Write VERSION
+        run: |
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VER="${{ github.event.inputs.version }}"
+          fi
+          printf '%s' "$VER" > VERSION
+
+      - name: Build binary
+        run: pyinstaller chainmind.spec --clean --noconfirm
+
+      - name: Zip binary
+        run: |
+          cd dist
+          zip ChainMind-Node-macos-arm64.zip ChainMind-Node
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/ChainMind-Node-macos-arm64.zip
+
+  # ── Linux x64 ───────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y binutils
+
+      - name: Install Python dependencies
+        run: pip install pyinstaller -r requirements.txt
+
+      - name: Write VERSION
+        run: |
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VER="${{ github.event.inputs.version }}"
+          fi
+          printf '%s' "$VER" > VERSION
+
+      - name: Build binary
+        run: pyinstaller chainmind.spec --clean --noconfirm
+
+      - name: Rename artifact
+        run: mv dist/ChainMind-Node dist/ChainMind-Node-linux-x64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: dist/ChainMind-Node-linux-x64
+
+  # ── Publish Release + update manifest ───────────────────────────────────────
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos-arm64, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine version
+        id: ver
+        run: |
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VER="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Compute SHA-256 checksums
+        id: checksums
+        run: |
+          WIN=$(sha256sum dist/windows-x64/ChainMind-Node-windows-x64.exe | awk '{print $1}')
+          MAC=$(sha256sum dist/macos-arm64/ChainMind-Node-macos-arm64.zip | awk '{print $1}')
+          LNX=$(sha256sum dist/linux-x64/ChainMind-Node-linux-x64 | awk '{print $1}')
+          echo "win=$WIN" >> "$GITHUB_OUTPUT"
+          echo "mac=$MAC" >> "$GITHUB_OUTPUT"
+          echo "lnx=$LNX" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: ChainMind Node v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/windows-x64/ChainMind-Node-windows-x64.exe
+            dist/macos-arm64/ChainMind-Node-macos-arm64.zip
+            dist/linux-x64/ChainMind-Node-linux-x64
+
+      - name: Commit updated manifest
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Always reset to latest origin/main so we never conflict with commits
+          # that landed while the build was running. We only add latest.json on top.
+          git fetch origin main
+          git reset --hard origin/main
+
+          REPO="${{ github.repository }}"
+          VER="${{ steps.ver.outputs.version }}"
+          BASE="https://github.com/${REPO}/releases/download/v${VER}"
+          mkdir -p release
+          cat > release/latest.json << MANIFEST
+          {
+            "version": "${VER}",
+            "changelog": "https://github.com/${REPO}/releases/tag/v${VER}",
+            "assets": {
+              "windows_x64":  "${BASE}/ChainMind-Node-windows-x64.exe",
+              "macos_arm64":  "${BASE}/ChainMind-Node-macos-arm64.zip",
+              "linux_x64":    "${BASE}/ChainMind-Node-linux-x64"
+            },
+            "checksums": {
+              "windows_x64":  "${{ steps.checksums.outputs.win }}",
+              "macos_arm64":  "${{ steps.checksums.outputs.mac }}",
+              "linux_x64":    "${{ steps.checksums.outputs.lnx }}"
+            }
+          }
+          MANIFEST
+
+          git add release/latest.json
+          git diff --cached --quiet || git commit -m "chore: update manifest to v${VER}"
+          git push origin HEAD:main
