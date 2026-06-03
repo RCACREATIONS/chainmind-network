@@ -12,6 +12,7 @@ Public CLI flags:
   --no-dashboard      Run node API only, no browser UI
   --no-browser        Don't auto-open the browser
   --setup             Re-run the setup wizard
+  --no-tray           Disable system tray (run console-only)
 """
 
 from __future__ import annotations
@@ -25,41 +26,6 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-
-
-def _create_desktop_shortcut() -> None:
-    """
-    Create a 'ChainMind Node.lnk' shortcut on the Windows Desktop
-    pointing to the running .exe. Safe to call every launch — skips
-    if the shortcut already exists. No-op on macOS/Linux.
-    """
-    if sys.platform != "win32":
-        return
-
-    try:
-        exe_path = sys.executable
-        desktop  = os.path.join(os.path.expanduser("~"), "Desktop")
-        shortcut = os.path.join(desktop, "ChainMind Node.lnk")
-
-        if os.path.exists(shortcut):
-            return
-
-        ps_script = (
-            "$ws = New-Object -ComObject WScript.Shell; "
-            f"$sc = $ws.CreateShortcut('{shortcut}'); "
-            f"$sc.TargetPath = '{exe_path}'; "
-            f"$sc.WorkingDirectory = '{os.path.dirname(exe_path)}'; "
-            "$sc.Description = 'ChainMind Network Node'; "
-            f"$sc.IconLocation = '{exe_path},0'; "
-            "$sc.Save()"
-        )
-        subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-            capture_output=True,
-            timeout=10,
-        )
-    except Exception:
-        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -358,9 +324,106 @@ def _download_ollama():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6.  Launch node server + dashboard as self-subprocesses
-#     Uses --_run-server / --_run-dashboard so the frozen .exe routes
-#     correctly without needing python -c or python -m flags.
+# 6.  Desktop shortcut
+# ─────────────────────────────────────────────────────────────────────────────
+def _create_desktop_shortcut() -> None:
+    """
+    Create a 'ChainMind Node.lnk' shortcut on the Windows Desktop
+    pointing to the running .exe. Safe to call every launch — skips
+    if the shortcut already exists. No-op on macOS/Linux.
+    """
+    if sys.platform != "win32":
+        return
+
+    try:
+        exe_path = str(Path(sys.executable).resolve())
+        desktop  = os.path.join(os.path.expanduser("~"), "Desktop")
+        shortcut = os.path.join(desktop, "ChainMind Node.lnk")
+
+        if os.path.exists(shortcut):
+            return
+
+        ps_script = (
+            "$ws = New-Object -ComObject WScript.Shell; "
+            f"$sc = $ws.CreateShortcut('{shortcut}'); "
+            f"$sc.TargetPath = '{exe_path}'; "
+            f"$sc.WorkingDirectory = '{os.path.dirname(exe_path)}'; "
+            "$sc.Description = 'ChainMind Network Node'; "
+            f"$sc.IconLocation = '{exe_path},0'; "
+            "$sc.Save()"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            print(f"{GREEN}  ✔ Desktop shortcut created{RESET}")
+        else:
+            print(f"{YELLOW}  Desktop shortcut: {result.stderr.decode(errors='replace').strip()}{RESET}")
+    except Exception as e:
+        print(f"{YELLOW}  Desktop shortcut failed: {e}{RESET}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.  Windows startup registration
+# ─────────────────────────────────────────────────────────────────────────────
+_STARTUP_KEY   = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_STARTUP_ENTRY = "ChainMind Network"
+
+
+def _register_windows_startup() -> None:
+    """Add this .exe to the Windows current-user startup registry key."""
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg
+        exe = str(Path(sys.executable).resolve())
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _STARTUP_KEY,
+            0, winreg.KEY_SET_VALUE,
+        )
+        # --no-browser: don't pop up browser on background auto-start
+        winreg.SetValueEx(key, _STARTUP_ENTRY, 0, winreg.REG_SZ,
+                          f'"{exe}" --no-browser')
+        winreg.CloseKey(key)
+        print(f"{GREEN}  ✔ Added to Windows startup (runs automatically at login){RESET}")
+    except Exception as e:
+        print(f"{YELLOW}  Startup registration failed: {e}{RESET}")
+
+
+def _is_registered_for_startup() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _STARTUP_KEY, 0, winreg.KEY_READ,
+        )
+        winreg.QueryValueEx(key, _STARTUP_ENTRY)
+        winreg.CloseKey(key)
+        return True
+    except Exception:
+        return False
+
+
+def _remove_windows_startup() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _STARTUP_KEY, 0, winreg.KEY_SET_VALUE,
+        )
+        winreg.DeleteValue(key, _STARTUP_ENTRY)
+        winreg.CloseKey(key)
+        print(f"{YELLOW}  Removed from Windows startup{RESET}")
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.  Launch node server + dashboard as self-subprocesses
 # ─────────────────────────────────────────────────────────────────────────────
 _procs: list[subprocess.Popen] = []
 
@@ -417,13 +480,148 @@ def _on_exit(*_):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7.  Main
+# 9.  System tray icon
+# ─────────────────────────────────────────────────────────────────────────────
+def _make_tray_icon_image():
+    """Create a purple ChainMind logo as a PIL Image for the tray."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+
+    size = 64
+    img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # Purple circle background
+    draw.ellipse([2, 2, size - 2, size - 2], fill=(124, 58, 237, 255))
+
+    # White "C" letter — use default font (always available)
+    text = "C"
+    try:
+        # Try to get a decent size with the default bitmap font
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw   = bbox[2] - bbox[0]
+        th   = bbox[3] - bbox[1]
+        tx   = (size - tw) // 2
+        ty   = (size - th) // 2
+        draw.text((tx, ty), text, fill=(255, 255, 255, 255), font=font)
+    except Exception:
+        # Absolute fallback: just a white dot in the centre
+        draw.ellipse([26, 26, 38, 38], fill=(255, 255, 255, 255))
+
+    return img
+
+
+def _run_tray(cfg: dict, node_proc_ref: list, no_dashboard: bool):
+    """
+    Start the system tray icon.  Blocks until the user clicks Exit.
+    Should be called from the main thread on most platforms.
+    Returns if pystray is unavailable (graceful degradation).
+    """
+    try:
+        import pystray
+    except ImportError:
+        print(f"{YELLOW}  pystray not available — running without system tray.{RESET}")
+        _console_wait_loop(node_proc_ref, cfg)
+        return
+
+    img = _make_tray_icon_image()
+    if img is None:
+        print(f"{YELLOW}  PIL not available — running without system tray.{RESET}")
+        _console_wait_loop(node_proc_ref, cfg)
+        return
+
+    dash_port = cfg.get("dashboard", {}).get("port", 8501)
+    dash_url  = f"http://localhost:{dash_port}"
+
+    # ── Tray menu actions ────────────────────────────────────────────────────
+    def on_open_dashboard(icon, item):
+        webbrowser.open(dash_url)
+
+    def on_restart_node(icon, item):
+        p = node_proc_ref[0]
+        if p:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+            time.sleep(1.5)
+        _procs[:] = [x for x in _procs if x is not p]
+        node_proc_ref[0] = _launch_node(cfg)
+
+    def on_startup_toggle(icon, item):
+        if _is_registered_for_startup():
+            _remove_windows_startup()
+        else:
+            _register_windows_startup()
+
+    def _startup_label(item):
+        return "✔ Run on Windows login" if _is_registered_for_startup() else "Run on Windows login"
+
+    def on_quit(icon, item):
+        icon.stop()
+        _on_exit()
+
+    menu_items = [
+        pystray.MenuItem("Open Dashboard", on_open_dashboard, default=True),
+        pystray.MenuItem("Restart Node",   on_restart_node),
+        pystray.Menu.SEPARATOR,
+    ]
+    if sys.platform == "win32":
+        menu_items.append(
+            pystray.MenuItem(_startup_label, on_startup_toggle)
+        )
+        menu_items.append(pystray.Menu.SEPARATOR)
+    menu_items.append(pystray.MenuItem("Exit ChainMind", on_quit))
+
+    icon = pystray.Icon(
+        "ChainMind Network",
+        img,
+        f"ChainMind Node  v{_get_version()}",
+        pystray.Menu(*menu_items),
+    )
+
+    # Background thread: watch the node process and restart on crash
+    def _monitor():
+        while True:
+            time.sleep(5)
+            p = node_proc_ref[0]
+            if p and p.poll() is not None:
+                print(f"{YELLOW}  Node process exited. Restarting…{RESET}")
+                _procs[:] = [x for x in _procs if x is not p]
+                node_proc_ref[0] = _launch_node(cfg)
+
+    threading.Thread(target=_monitor, daemon=True).start()
+
+    print(f"{GREEN}  ✔ ChainMind is running in the system tray. Right-click the tray icon to manage it.{RESET}\n")
+    icon.run()   # blocks until icon.stop() is called
+
+
+def _console_wait_loop(node_proc_ref: list, cfg: dict):
+    """Fallback when no system tray: watch node process in a console loop."""
+    print(f"\n{BOLD}  ChainMind Node is running.{RESET}")
+    print(f"  Press {YELLOW}Ctrl+C{RESET} to stop.\n")
+    while True:
+        time.sleep(5)
+        p = node_proc_ref[0]
+        if p and p.poll() is not None:
+            print(f"{YELLOW}  Node process exited. Restarting…{RESET}")
+            _procs[:] = [x for x in _procs if x is not p]
+            node_proc_ref[0] = _launch_node(cfg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.  Main
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="ChainMind Node")
     parser.add_argument("--update",       action="store_true", help="Force update check")
     parser.add_argument("--no-dashboard", action="store_true", help="Run node API only")
     parser.add_argument("--no-browser",   action="store_true", help="Don't open browser")
+    parser.add_argument("--no-tray",      action="store_true", help="Disable system tray")
     parser.add_argument("--setup",        action="store_true", help="Re-run setup wizard")
     args = parser.parse_args()
 
@@ -439,21 +637,15 @@ def main():
     cfg = maybe_run_wizard()
 
     # ── Frozen-mode config relocation ──────────────────────────────────────────
-    # setup_wizard.py uses Path(__file__).parent.parent to find the save location,
-    # which in a frozen exe resolves to _MEIPASS (temp dir), NOT the install dir.
-    # After the wizard runs, copy config.yaml from wherever it was written to
-    # INSTALL_DIR so all subprocesses (pointed via CHAINMIND_CONFIG) find it.
     if getattr(sys, "frozen", False):
         import shutil as _shutil
         import yaml as _yaml
         install_cfg = INSTALL_DIR / "config.yaml"
-        # Where the wizard likely saved it (relative to __file__ in frozen mode)
         bundle_cfg  = BUNDLE_DIR / "config.yaml"
         if not install_cfg.exists():
             if bundle_cfg.exists():
                 _shutil.copy2(str(bundle_cfg), str(install_cfg))
             else:
-                # Last resort: walk up from BUNDLE_DIR looking for config.yaml
                 for candidate in [
                     BUNDLE_DIR.parent / "config.yaml",
                     Path(sys.executable).parent / "config.yaml",
@@ -462,15 +654,21 @@ def main():
                         _shutil.copy2(str(candidate), str(install_cfg))
                         break
                 else:
-                    # Config still missing — write it from the dict the wizard returned
                     if cfg:
                         with open(install_cfg, "w") as _f:
                             _yaml.dump(cfg, _f, default_flow_style=False)
-        # Re-read cfg from the canonical location so it's always consistent
         if install_cfg.exists():
             with open(install_cfg) as _f:
                 cfg = _yaml.safe_load(_f) or cfg
 
+    # ── One-time setup tasks ───────────────────────────────────────────────────
+    _create_desktop_shortcut()
+
+    # Register for Windows startup on first run (only if not already registered)
+    if sys.platform == "win32" and not _is_registered_for_startup():
+        _register_windows_startup()
+
+    # ── Background update check ────────────────────────────────────────────────
     threading.Thread(
         target=_check_updates_bg,
         args=(args.update,),
@@ -483,21 +681,17 @@ def main():
     signal.signal(signal.SIGTERM, _on_exit)
 
     print()
-    node_proc = _launch_node(cfg)
+    node_proc    = _launch_node(cfg)
+    node_proc_ref = [node_proc]   # mutable ref so threads can swap it
     time.sleep(1.5)
 
     if not args.no_dashboard:
         _launch_dashboard(cfg, open_browser=not args.no_browser)
 
-    print(f"\n{BOLD}  ChainMind Node is running.{RESET}")
-    print(f"  Press {YELLOW}Ctrl+C{RESET} to stop.\n")
-
-    while True:
-        time.sleep(5)
-        if node_proc.poll() is not None:
-            print(f"{YELLOW}  Node process exited. Restarting…{RESET}")
-            _procs.remove(node_proc)
-            node_proc = _launch_node(cfg)
+    if args.no_tray:
+        _console_wait_loop(node_proc_ref, cfg)
+    else:
+        _run_tray(cfg, node_proc_ref, args.no_dashboard)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

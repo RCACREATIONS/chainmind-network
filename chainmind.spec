@@ -3,21 +3,22 @@
 #
 # Build:  pyinstaller chainmind.spec --clean
 #
-# The spec bundles:
-#   - chainmind_launcher.py  (entry point)
+# Bundles:
+#   - chainmind_launcher.py       (entry point)
 #   - All node/* Python source
-#   - Streamlit static files (frozen quirk)
-#   - Streamlit + other package dist-info (so importlib.metadata works)
-#   - config.yaml (default template — always has all keys incl. models)
-#   - VERSION file
+#   - Streamlit static files
+#   - Package dist-info (importlib.metadata)
+#   - config.yaml                 (default template with models catalog)
+#   - VERSION
+#   - psutil                      (hardware detection — RAM/CPU/disk)
+#   - pystray                     (system tray icon)
 
 import sys
 from pathlib import Path
 import streamlit
-from PyInstaller.utils.hooks import copy_metadata, collect_data_files
+from PyInstaller.utils.hooks import copy_metadata, collect_data_files, collect_all
 
 def _icon():
-    """Return icon path only if the file actually exists — avoids build crash."""
     if sys.platform == "win32":
         p = Path("assets/icon.ico")
         return str(p) if p.exists() else None
@@ -28,66 +29,67 @@ def _icon():
 
 STREAMLIT_DIR = Path(streamlit.__file__).parent
 
-# ── Package metadata (dist-info) that must survive into the frozen bundle ──
-# Streamlit reads its own version via importlib.metadata at import time.
-# Without these, you get: PackageNotFoundError: No package metadata for streamlit
+# ── Package metadata ───────────────────────────────────────────────────────
 metadata_datas = []
 for pkg in [
-    "streamlit",
-    "altair",
-    "pydeck",
-    "pyarrow",
-    "pandas",
-    "httpx",
-    "fastapi",
-    "uvicorn",
-    "click",
-    "rich",
-    "packaging",
-    "gitpython",
-    "tenacity",
-    "toml",
-    "validators",
-    "plotly",
-    "numpy",
-    "requests",
-    "PIL",
-    "attr",
-    "attrs",
-    "toolz",
-    "jinja2",
-    "psutil",
+    "streamlit", "altair", "pydeck", "pyarrow", "pandas", "httpx",
+    "fastapi", "uvicorn", "click", "rich", "packaging", "gitpython",
+    "tenacity", "toml", "validators", "plotly", "numpy", "requests",
+    "PIL", "attr", "attrs", "toolz", "jinja2", "psutil", "pystray",
 ]:
     try:
         metadata_datas += copy_metadata(pkg)
     except Exception:
-        pass   # package not installed — skip silently
+        pass
+
+# ── psutil — collect everything (binaries + data + hidden imports) ─────────
+try:
+    psutil_datas, psutil_binaries, psutil_hidden = collect_all("psutil")
+except Exception:
+    psutil_datas, psutil_binaries, psutil_hidden = [], [], []
+
+# ── pystray ────────────────────────────────────────────────────────────────
+try:
+    pystray_datas, pystray_binaries, pystray_hidden = collect_all("pystray")
+except Exception:
+    pystray_datas, pystray_binaries, pystray_hidden = [], [], []
 
 block_cipher = None
 
 a = Analysis(
     ["chainmind_launcher.py"],
     pathex=["."],
-    binaries=[],
+    binaries=[] + psutil_binaries + pystray_binaries,
     datas=[
-        # Streamlit static assets — required for frozen builds
-        (str(STREAMLIT_DIR / "static"),       "streamlit/static"),
-        (str(STREAMLIT_DIR / "runtime"),      "streamlit/runtime"),
-        (str(STREAMLIT_DIR / "web"),          "streamlit/web"),
-        # Your node package
-        ("node",                              "node"),
-        # Default config template — bundles all keys so the wizard can always
-        # deep-merge against a full template (includes the models catalog).
-        ("config.yaml",                       "."),
-        # Version marker
-        ("VERSION",                           "."),
-    ] + metadata_datas,
+        (str(STREAMLIT_DIR / "static"),  "streamlit/static"),
+        (str(STREAMLIT_DIR / "runtime"), "streamlit/runtime"),
+        (str(STREAMLIT_DIR / "web"),     "streamlit/web"),
+        ("node",                         "node"),
+        # Default config with full models catalog — copied to install dir on first run
+        ("config.yaml",                  "."),
+        ("VERSION",                      "."),
+    ] + metadata_datas + psutil_datas + pystray_datas,
     hiddenimports=[
-        # psutil — needed for RAM/CPU/disk detection in system_check.py
+        # ── psutil platform modules ───────────────────────────────────────
         "psutil",
+        "psutil._common",
         "psutil._pswindows",
         "psutil._pslinux",
         "psutil._psosx",
+        "psutil._psaix",
+        "psutil._psbsd",
+        "psutil._pssunos",
+        # ── pystray ───────────────────────────────────────────────────────
+        "pystray",
+        "pystray._win32",
+        "pystray._darwin",
+        "pystray._xorg",
+        "pystray._gtk",
+        # ── Windows stdlib ────────────────────────────────────────────────
+        "winreg",
+        # ── PIL / Pillow ──────────────────────────────────────────────────
+        "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
+        # ── Streamlit ────────────────────────────────────────────────────
         "streamlit",
         "streamlit.web",
         "streamlit.web.cli",
@@ -99,48 +101,23 @@ a = Analysis(
         "streamlit.runtime.state",
         "streamlit.runtime.uploaded_file_manager",
         "streamlit.components.v1",
-        "altair",
-        "pydeck",
-        "pyarrow",
-        "pandas",
-        "numpy",
-        "plotly",
-        "plotly.graph_objects",
-        "plotly.express",
-        "plotly.subplots",
-        "plotly.figure_factory",
-        "plotly.io",
-        "httpx",
-        "httpx._transports",
-        "httpx._transports.default",
-        "fastapi",
-        "fastapi.middleware",
-        "fastapi.middleware.cors",
-        "uvicorn",
-        "uvicorn.logging",
-        "uvicorn.loops",
-        "uvicorn.loops.auto",
-        "uvicorn.loops.asyncio",
-        "uvicorn.protocols",
-        "uvicorn.protocols.http",
-        "uvicorn.protocols.http.auto",
-        "uvicorn.protocols.http.h11_impl",
-        "uvicorn.protocols.websockets",
-        "uvicorn.protocols.websockets.auto",
-        "uvicorn.lifespan",
-        "uvicorn.lifespan.on",
-        "importlib.metadata",
-        "importlib_metadata",
-        "pkg_resources",
-        "requests",
-        "PIL",
-        "PIL.Image",
-        "attr",
-        "attrs",
-        "toolz",
-        "jinja2",
-        "jinja2.ext",
-    ],
+        # ── Data / plotting ──────────────────────────────────────────────
+        "altair", "pydeck", "pyarrow", "pandas", "numpy",
+        "plotly", "plotly.graph_objects", "plotly.express",
+        "plotly.subplots", "plotly.figure_factory", "plotly.io",
+        # ── HTTP / API ───────────────────────────────────────────────────
+        "httpx", "httpx._transports", "httpx._transports.default",
+        "fastapi", "fastapi.middleware", "fastapi.middleware.cors",
+        "uvicorn", "uvicorn.logging",
+        "uvicorn.loops", "uvicorn.loops.auto", "uvicorn.loops.asyncio",
+        "uvicorn.protocols", "uvicorn.protocols.http",
+        "uvicorn.protocols.http.auto", "uvicorn.protocols.http.h11_impl",
+        "uvicorn.protocols.websockets", "uvicorn.protocols.websockets.auto",
+        "uvicorn.lifespan", "uvicorn.lifespan.on",
+        # ── Misc ─────────────────────────────────────────────────────────
+        "importlib.metadata", "importlib_metadata", "pkg_resources",
+        "requests", "attr", "attrs", "toolz", "jinja2", "jinja2.ext",
+    ] + psutil_hidden + pystray_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -167,7 +144,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,          # keep console so users see logs
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
