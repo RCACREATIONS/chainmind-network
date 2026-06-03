@@ -178,6 +178,18 @@ def plotly_layout(**kw):
         **kw
     )
 
+def _to_dataframe(data) -> pd.DataFrame:
+    """
+    Safely convert API response to a DataFrame.
+    Handles: list-of-dicts (normal), single dict (wrap it), empty list/None.
+    Fixes: ValueError 'If using all scalar values, you must pass an index'
+    """
+    if not data:
+        return pd.DataFrame()
+    if isinstance(data, dict):
+        data = [data]
+    return pd.DataFrame(data)
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     # ── ChainMind brand logo — CM cube + network nodes + wordmark ─────────────
@@ -354,15 +366,18 @@ if page == "🏠 Overview":
     st.subheader("Recent Tasks")
     tasks = fetch("/tasks?limit=10") or []
     if tasks:
-        df = pd.DataFrame(tasks)
-        df["time"]    = pd.to_datetime(df["created_at"], unit="s").dt.strftime("%H:%M:%S")
-        df["dur_s"]   = (df["duration_ms"] / 1000).round(2)
-        df["privacy"] = "🔒 encrypted"
-        sm = {"done": "✅ done", "error": "❌ error", "running": "⏳ running", "pending": "🕐 pending"}
-        df["status"] = df["status"].map(lambda s: sm.get(s, s))
-        st.dataframe(
-            df[["time", "status", "model", "tokens_in", "tokens_out", "dur_s", "routed_to", "privacy"]], width='stretch', hide_index=True,
-        )
+        df = _to_dataframe(tasks)
+        if not df.empty and "created_at" in df.columns:
+            df["time"]    = pd.to_datetime(df["created_at"], unit="s").dt.strftime("%H:%M:%S")
+            df["dur_s"]   = (df.get("duration_ms", pd.Series([0]*len(df))) / 1000).round(2)
+            df["privacy"] = "🔒 encrypted"
+            sm = {"done": "✅ done", "error": "❌ error", "running": "⏳ running", "pending": "🕐 pending"}
+            if "status" in df.columns:
+                df["status"] = df["status"].map(lambda s: sm.get(s, s))
+            cols = [c for c in ["time", "status", "model", "tokens_in", "tokens_out", "dur_s", "routed_to", "privacy"] if c in df.columns]
+            st.dataframe(df[cols], width='stretch', hide_index=True)
+        else:
+            st.dataframe(df, width='stretch', hide_index=True)
     else:
         st.markdown(
             "<div class='cm-card' style='text-align:center;color:#6d28d9;padding:30px'>"
@@ -406,7 +421,6 @@ elif page == "🖥 System":
 
     with col_r:
         st.subheader("Your Node Tier")
-        # Safe import — works both when Streamlit runs dashboard.py directly and as a package
         try:
             from node.reputation import TIER_LABELS as _TL, TIER_HARDWARE as _TH, TIER_MULTIPLIERS as _TM
         except ImportError:
@@ -450,7 +464,7 @@ elif page == "🖥 System":
                         unsafe_allow_html=True,
                     )
     else:
-        st.info("System info not available.")
+        st.info("System info not available — make sure the node server is running and the /system endpoint is implemented.")
 
 # ════════════════════════════════════════════════════════
 elif page == "🌐 Network":
@@ -461,7 +475,6 @@ elif page == "🌐 Network":
     net   = fetch("/network/status") or {}
     peers = net.get("peers", [])
 
-    # ── Summary metrics ───────────────────────────────────────────────────
     central_cfg = CFG.get("central", {})
     central_enabled = (
         central_cfg.get("enabled", False)
@@ -477,7 +490,6 @@ elif page == "🌐 Network":
 
     st.divider()
 
-    # ── Top row: manual connect + network map ─────────────────────────────
     col_l, col_r = st.columns(2)
 
     with col_l:
@@ -492,7 +504,6 @@ elif page == "🌐 Network":
                 st.success(f"Connected to {result.get('name', peer_url)}")
                 st.cache_data.clear()
 
-        # ── Your Node URL — show public URL if available ──────────────────
         st.subheader("Your Node URL")
         pub_url = net.get("public_url")
         if pub_url:
@@ -542,10 +553,8 @@ elif page == "🌐 Network":
 
     st.divider()
 
-    # ── Peer tabs: Local (gossip) + Central directory ─────────────────────
     tab_local, tab_central = st.tabs(["🔗 Local Peers (Gossip)", "🌍 Central Server Directory"])
 
-    # ── LOCAL PEERS ───────────────────────────────────────────────────────
     with tab_local:
         st.caption("Peers discovered via gossip — your node talks to these directly, peer-to-peer.")
         if peers:
@@ -571,7 +580,6 @@ elif page == "🌐 Network":
                 unsafe_allow_html=True,
             )
 
-    # ── CENTRAL SERVER DIRECTORY ──────────────────────────────────────────
     with tab_central:
         if not central_enabled:
             st.markdown(
@@ -588,7 +596,6 @@ elif page == "🌐 Network":
                 f"then gossip directly once discovered."
             )
 
-            # Fetch from central server via the node's proxy endpoint
             if st.button("🔄 Refresh Directory"):
                 st.cache_data.clear()
 
@@ -598,7 +605,6 @@ elif page == "🌐 Network":
 
             central_peers = fetch_central_peers()
 
-            # Always show your own registration status
             stats_data = fetch("/stats") or {}
             rep_data   = stats_data.get("reputation") or {}
             my_tier    = rep_data.get("tier", "nano")
@@ -632,10 +638,7 @@ elif page == "🌐 Network":
                     unsafe_allow_html=True,
                 )
             else:
-                # Build a set of already-known local peer IDs for quick lookup
                 local_peer_ids = {p["id"] for p in peers}
-
-                # Summary banner
                 already_known = sum(1 for p in central_peers if p.get("id") in local_peer_ids)
                 new_count     = len(central_peers) - already_known
                 st.markdown(
@@ -649,7 +652,6 @@ elif page == "🌐 Network":
                     unsafe_allow_html=True,
                 )
 
-                # Connect-all-new shortcut
                 if new_count > 0:
                     if st.button(f"⚡ Connect to all {new_count} new peer(s)", type="primary"):
                         connected = 0
@@ -670,7 +672,6 @@ elif page == "🌐 Network":
 
                 st.markdown("<br/>", unsafe_allow_html=True)
 
-                # Per-peer rows
                 for p in central_peers:
                     peer_id    = p.get("id", "")
                     peer_url   = p.get("url", "")
@@ -687,14 +688,9 @@ elif page == "🌐 Network":
                     with st.container():
                         ca, cb, cc, cd, ce = st.columns([3, 2, 2, 2, 1])
 
-                        # Name + URL
                         peer_line = f"**{peer_name}**  \n" + f"<span style='font-size:11px;color:#6d28d9'>`{peer_url}`</span>"
-                        ca.markdown(
-                            peer_line,
-                            unsafe_allow_html=True,
-                        )
+                        ca.markdown(peer_line, unsafe_allow_html=True)
 
-                        # Tier badge + models
                         cb.markdown(
                             f"<span style='background:{tier_bg};color:{tier_col};"
                             f"padding:2px 8px;border-radius:12px;font-size:12px;font-weight:700'>"
@@ -707,26 +703,16 @@ elif page == "🌐 Network":
                                 model_preview += f" +{len(peer_models)-2}"
                             cb.caption(model_preview)
 
-                        # Stats
                         cc.caption(f"IQ: **{peer_iq:.4f}**")
                         cc.caption(f"Rep: {peer_rep:.0f} · Jobs: {peer_jobs}")
 
-                        # Known / not known
                         if is_known:
-                            cd.markdown(
-                                "<span class='cm-badge-ok'>✓ In peer list</span>",
-                                unsafe_allow_html=True,
-                            )
+                            cd.markdown("<span class='cm-badge-ok'>✓ In peer list</span>", unsafe_allow_html=True)
                         else:
-                            cd.markdown(
-                                "<span class='cm-badge-warn'>Not connected</span>",
-                                unsafe_allow_html=True,
-                            )
+                            cd.markdown("<span class='cm-badge-warn'>Not connected</span>", unsafe_allow_html=True)
 
-                        # Connect button (only for unknown peers)
                         if not is_known:
-                            if ce.button("🔌", key=f"central_connect_{peer_id}",
-                                         help=f"Connect to {peer_name}"):
+                            if ce.button("🔌", key=f"central_connect_{peer_id}", help=f"Connect to {peer_name}"):
                                 with st.spinner(f"Connecting to {peer_name}…"):
                                     result = post("/network/connect", {"url": peer_url})
                                 if "error" in result:
@@ -742,7 +728,6 @@ elif page == "🌐 Network":
                             unsafe_allow_html=True,
                         )
 
-            # Explain the architecture
             st.markdown(
                 f"<div class='cm-card' style='background:#f5f3ff;border-color:#ddd6fe;margin-top:16px'>"
                 f"<div style='font-size:12px;color:#4c1d95;font-weight:600;margin-bottom:4px'>HOW IT WORKS</div>"
@@ -1006,21 +991,24 @@ elif page == "📋 Tasks":
 
     tasks = fetch(f"/tasks?limit={limit}") or []
     if filter_status != "all":
-        tasks = [t for t in tasks if t.get("status") == filter_status]
+        tasks = [t for t in tasks if isinstance(t, dict) and t.get("status") == filter_status]
 
     if tasks:
-        df = pd.DataFrame(tasks)
-        df["time"]    = pd.to_datetime(df["created_at"], unit="s").dt.strftime("%Y-%m-%d %H:%M:%S")
-        df["dur_s"]   = (df["duration_ms"] / 1000).round(2)
-        df["privacy"] = "🔒 encrypted"
-        sm = {"done": "✅ done", "error": "❌ error", "running": "⏳ running", "pending": "🕐 pending"}
-        df["status"] = df["status"].map(lambda s: sm.get(s, s))
-        st.dataframe(
-            df[["time", "status", "model", "routed_to", "tokens_in", "tokens_out", "dur_s", "privacy"]], width='stretch', hide_index=True,
-        )
-        done_count = sum(1 for t in tasks if "done" in t.get("status", ""))
-        err_count  = sum(1 for t in tasks if "error" in t.get("status", ""))
-        st.caption(f"{len(tasks)} tasks · {done_count} done · {err_count} errors")
+        df = _to_dataframe(tasks)
+        if not df.empty and "created_at" in df.columns:
+            df["time"]    = pd.to_datetime(df["created_at"], unit="s").dt.strftime("%Y-%m-%d %H:%M:%S")
+            df["dur_s"]   = (df.get("duration_ms", pd.Series([0]*len(df))) / 1000).round(2)
+            df["privacy"] = "🔒 encrypted"
+            sm = {"done": "✅ done", "error": "❌ error", "running": "⏳ running", "pending": "🕐 pending"}
+            if "status" in df.columns:
+                df["status"] = df["status"].map(lambda s: sm.get(s, s))
+            cols = [c for c in ["time", "status", "model", "routed_to", "tokens_in", "tokens_out", "dur_s", "privacy"] if c in df.columns]
+            st.dataframe(df[cols], width='stretch', hide_index=True)
+            done_count = sum(1 for t in tasks if isinstance(t, dict) and "done" in t.get("status", ""))
+            err_count  = sum(1 for t in tasks if isinstance(t, dict) and "error" in t.get("status", ""))
+            st.caption(f"{len(tasks)} tasks · {done_count} done · {err_count} errors")
+        else:
+            st.dataframe(df, width='stretch', hide_index=True)
     else:
         st.markdown(
             "<div class='cm-card' style='text-align:center;color:#6d28d9;padding:30px'>No tasks match.</div>",
@@ -1053,16 +1041,21 @@ elif page == "🏆 Leaderboard":
 
     st.subheader("Network Rankings")
     if board:
-        df = pd.DataFrame(board)
-        df["last_seen"]  = pd.to_datetime(df["last_seen"], unit="s", errors="coerce").dt.strftime("%H:%M:%S")
-        df["iq_earned"]  = df["iq_earned"].round(6)
-        df["reputation"] = df["reputation"].round(1)
-        sm = {"online": "🟢", "offline": "🔴", "degraded": "🟡", "unknown": "⚪"}
-        df["status"] = df["status"].map(lambda s: sm.get(s, "⚪") + " " + s)
-        df["name"]   = df.apply(lambda r: r["name"] if r["name"] else r["id"][:12] + "…", axis=1)
-        st.dataframe(
-            df[["name", "tier", "iq_earned", "tasks_done", "reputation", "status", "last_seen"]], width='stretch', hide_index=True,
-        )
+        df = _to_dataframe(board)
+        if not df.empty:
+            if "last_seen" in df.columns:
+                df["last_seen"] = pd.to_datetime(df["last_seen"], unit="s", errors="coerce").dt.strftime("%H:%M:%S")
+            if "iq_earned" in df.columns:
+                df["iq_earned"] = df["iq_earned"].round(6)
+            if "reputation" in df.columns:
+                df["reputation"] = df["reputation"].round(1)
+            sm = {"online": "🟢", "offline": "🔴", "degraded": "🟡", "unknown": "⚪"}
+            if "status" in df.columns:
+                df["status"] = df["status"].map(lambda s: sm.get(s, "⚪") + " " + s)
+            if "name" in df.columns and "id" in df.columns:
+                df["name"] = df.apply(lambda r: r["name"] if r["name"] else r["id"][:12] + "…", axis=1)
+            cols = [c for c in ["name", "tier", "iq_earned", "tasks_done", "reputation", "status", "last_seen"] if c in df.columns]
+            st.dataframe(df[cols], width='stretch', hide_index=True)
         fig = go.Figure(go.Bar(
             x=[p.get("name") or p["id"][:8] for p in board[:20]],
             y=[p.get("iq_earned", 0) for p in board[:20]],
@@ -1157,13 +1150,10 @@ elif page == "💰 Billing & Account":
         and bool(central_cfg.get("node_secret", ""))
     )
 
-    # ── Earnings from central server ──────────────────────────────────────────
     st.subheader("Earnings & Withdrawals")
     earnings_data = fetch("/account/earnings") or {}
-    # server returns {"earnings": {...node fields...}} — handle both new and old key names
     earnings = earnings_data.get("earnings") or {}
 
-    # Always show live local stats from node (available even without central)
     local_stats = fetch("/stats") or {}
     local_rep   = local_stats.get("reputation") or {}
     local_iq    = local_rep.get("iq_earned", 0.0)
@@ -1175,7 +1165,7 @@ elif page == "💰 Billing & Account":
         node_status = earnings.get("status", "—")
     else:
         iq_total  = local_iq
-        iq_avail  = local_iq   # if not linked, all local IQ is "available"
+        iq_avail  = local_iq
         node_status = "local"
 
     c1, c2, c3 = st.columns(3)
@@ -1201,7 +1191,6 @@ elif page == "💰 Billing & Account":
 
     st.divider()
 
-    # ── Link Web Account ───────────────────────────────────────────────────────
     st.subheader("🔗 Link Web Account")
     linked_email = earnings.get("linked_email") or ""
 
@@ -1242,7 +1231,6 @@ elif page == "💰 Billing & Account":
 
     st.divider()
 
-    # ── Request Withdrawal ─────────────────────────────────────────────────────
     st.subheader("💸 Request Withdrawal")
     min_wd = 10.0
 
@@ -1288,7 +1276,6 @@ elif page == "💰 Billing & Account":
 
     st.divider()
 
-    # ── Withdrawal History ─────────────────────────────────────────────────────
     if earnings and earnings.get("withdrawals"):
         st.subheader("📋 Withdrawal History")
         wds = earnings["withdrawals"]
@@ -1299,27 +1286,28 @@ elif page == "💰 Billing & Account":
             "Method":     w.get("method",""),
             "Status":     w.get("status",""),
         } for w in wds]
-        import pandas as pd
         st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
 elif page == "⚙️ Settings":
     st.title("Settings")
     st.subheader("Node Configuration")
 
+    _dash_cfg = CFG.get("dashboard", {})
+    _dash_port = _dash_cfg.get("port", 8501) if _dash_cfg else 8501
+
     st.markdown(
         f"<div class='cm-card'>"
         f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px'>"
         f"<div><span style='color:#6d28d9;font-weight:600'>Node Name</span><br/>{CFG['node']['name']}</div>"
         f"<div><span style='color:#6d28d9;font-weight:600'>API Port</span><br/>{CFG['node']['port']}</div>"
-        f"<div><span style='color:#6d28d9;font-weight:600'>Dashboard Port</span><br/>{CFG['dashboard']['port']}</div>"
-        f"<div><span style='color:#6d28d9;font-weight:600'>Ollama</span><br/>{CFG['ollama']['host']}:{CFG['ollama']['port']}</div>"
-        f"<div><span style='color:#6d28d9;font-weight:600'>Max Peers</span><br/>{CFG['network']['max_peers']}</div>"
-        f"<div><span style='color:#6d28d9;font-weight:600'>Database</span><br/>{CFG['database']['path']}</div>"
+        f"<div><span style='color:#6d28d9;font-weight:600'>Dashboard Port</span><br/>{_dash_port}</div>"
+        f"<div><span style='color:#6d28d9;font-weight:600'>Ollama</span><br/>{CFG.get('ollama',{}).get('host','localhost')}:{CFG.get('ollama',{}).get('port',11434)}</div>"
+        f"<div><span style='color:#6d28d9;font-weight:600'>Max Peers</span><br/>{CFG.get('network',{}).get('max_peers','?')}</div>"
+        f"<div><span style='color:#6d28d9;font-weight:600'>Database</span><br/>{CFG.get('database',{}).get('path','?')}</div>"
         f"</div></div>",
         unsafe_allow_html=True,
     )
 
-    # ── Central server config display ─────────────────────────────────────
     central_cfg = CFG.get("central", {})
     central_enabled = (
         central_cfg.get("enabled", False)
@@ -1350,15 +1338,17 @@ elif page == "⚙️ Settings":
     st.caption("Edit `config.yaml` in the node folder to change these settings.")
     st.divider()
     st.subheader("IQ Token Economy")
+    _tokens_cfg = CFG.get("tokens", {})
+    _tier_mults = _tokens_cfg.get("tier_multipliers", {})
     st.markdown(
         f"<div class='cm-card'>"
         f"<div style='font-size:13px;color:#1e1b4b'>"
-        f"Base rate: <b>{CFG['tokens']['base_rate']} IQ per token</b><br/>"
+        f"Base rate: <b>{_tokens_cfg.get('base_rate', '?')} IQ per token</b><br/>"
         f"<div style='margin-top:8px;display:flex;gap:8px;flex-wrap:wrap'>"
         + "".join(
-            f"<span style='background:{TIER_BG[t]};color:{TIER_COLORS[t]};padding:4px 12px;"
+            f"<span style='background:{TIER_BG.get(t, PURPLE_LL)};color:{TIER_COLORS.get(t, PURPLE)};padding:4px 12px;"
             f"border-radius:12px;font-weight:700;font-size:12px'>{t.upper()} {v}×</span>"
-            for t, v in CFG["tokens"]["tier_multipliers"].items()
+            for t, v in _tier_mults.items()
         ) +
         f"</div></div></div>",
         unsafe_allow_html=True,
