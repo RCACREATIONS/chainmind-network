@@ -421,7 +421,7 @@ def _register_windows_startup() -> None:
         )
         # --no-browser: don't pop up browser on background auto-start
         winreg.SetValueEx(key, _STARTUP_ENTRY, 0, winreg.REG_SZ,
-                          f'"{exe}" --no-browser')
+                          f'"{exe}" --no-browser --no-setup')
         winreg.CloseKey(key)
         print(f"{GREEN}  ✔ Added to Windows startup (runs automatically at login){RESET}")
     except Exception as e:
