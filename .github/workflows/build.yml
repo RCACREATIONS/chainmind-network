@@ -206,8 +206,16 @@ jobs:
             dist/macos-arm64/ChainMind-Node-macos-arm64.zip
             dist/linux-x64/ChainMind-Node-linux-x64
 
-      - name: Write release/latest.json
+      - name: Commit updated manifest
         run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Always reset to latest origin/main so we never conflict with commits
+          # that landed while the build was running. We only add latest.json on top.
+          git fetch origin main
+          git reset --hard origin/main
+
           REPO="${{ github.repository }}"
           VER="${{ steps.ver.outputs.version }}"
           BASE="https://github.com/${REPO}/releases/download/v${VER}"
@@ -229,11 +237,6 @@ jobs:
           }
           MANIFEST
 
-      - name: Commit updated manifest
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add release/latest.json
-          git commit -m "chore: update manifest to v${{ steps.ver.outputs.version }}" || echo "Nothing to commit"
-          git pull --rebase origin main
+          git diff --cached --quiet || git commit -m "chore: update manifest to v${VER}"
           git push origin HEAD:main
