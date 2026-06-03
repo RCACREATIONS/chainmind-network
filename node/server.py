@@ -433,3 +433,27 @@ async def account_earnings(_auth=Depends(require_auth)):
         return {"error": "Central client not running"}
     data = await central.get_earnings_info()
     return {"earnings": data}
+
+# ─────────────────────────────────────────────────────────────────
+# ADD THIS BLOCK TO THE BOTTOM OF node/server.py
+# This is what chainmind_launcher.py imports on line 90:
+#   from node.server import run_server
+# ─────────────────────────────────────────────────────────────────
+
+def run_server(host: str = "0.0.0.0", port: int = 8000, config_path: str = None):
+    """
+    Entry point called by chainmind_launcher.py.
+    Starts the FastAPI node server via uvicorn.
+    """
+    import uvicorn
+    import os
+
+    if config_path:
+        os.environ.setdefault("CHAINMIND_CONFIG", config_path)
+
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
