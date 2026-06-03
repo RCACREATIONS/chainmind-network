@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys as _sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -53,18 +54,25 @@ async def require_auth(
     raise HTTPException(status_code=401, detail="Invalid or missing node API token")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-_cfg_path = Path(__file__).parent.parent / "config.yaml"
-with open(_cfg_path) as f:
-    CFG: dict[str, Any] = yaml.safe_load(f)
+# In a frozen PyInstaller exe, __file__ points inside the _MEIPASS temp dir —
+# config.yaml lives next to the .exe in the install dir, not in _MEIPASS.
+if getattr(_sys, "frozen", False):
+    _cfg_path = Path(_sys.executable).parent / "config.yaml"
+else:
+    _cfg_path = Path(__file__).parent.parent / "config.yaml"
 
-NODE_CFG  = CFG["node"]
-OLLAMA_URL = f"{CFG['ollama']['host']}:{CFG['ollama']['port']}"
-DB_PATH   = str(Path(__file__).parent.parent / CFG["database"]["path"])
-DATA_DIR  = str(Path(__file__).parent.parent / "data")
-CATALOG   = CFG.get("models", {})
+with open(_cfg_path) as f:
+    CFG: dict[str, Any] = yaml.safe_load(f) or {}
+
+NODE_CFG   = CFG.get("node", {})
+_ollama    = CFG.get("ollama", {"host": "http://localhost", "port": 11434})
+OLLAMA_URL = f"{_ollama.get('host', 'http://localhost')}:{_ollama.get('port', 11434)}"
+DB_PATH    = str(Path(_cfg_path).parent / CFG.get("database", {}).get("path", "data/node.db"))
+DATA_DIR   = str(Path(_cfg_path).parent / "data")
+CATALOG    = CFG.get("models", {})
 
 NODE_ID  = load_node_id(DATA_DIR)
-SELF_URL = f"http://localhost:{NODE_CFG['port']}"
+SELF_URL = f"http://localhost:{NODE_CFG.get('port', 8000)}"
 
 ollama    = OllamaClient(OLLAMA_URL)
 con       = init_db(DB_PATH)
@@ -276,7 +284,6 @@ async def network_peers():
 async def network_status(_auth=Depends(require_auth)):
     all_peers = get_peers(con)
     online    = get_online_peers(con)
-    # Include the detected public URL so the dashboard can display it
     pub_url   = central.public_url if central else None
     return {
         "node_id":    NODE_ID,
