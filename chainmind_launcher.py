@@ -27,6 +27,41 @@ import webbrowser
 from pathlib import Path
 
 
+def _create_desktop_shortcut() -> None:
+    """
+    Create a 'ChainMind Node.lnk' shortcut on the Windows Desktop
+    pointing to the running .exe. Safe to call every launch — skips
+    if the shortcut already exists. No-op on macOS/Linux.
+    """
+    if sys.platform != "win32":
+        return
+
+    try:
+        exe_path = sys.executable
+        desktop  = os.path.join(os.path.expanduser("~"), "Desktop")
+        shortcut = os.path.join(desktop, "ChainMind Node.lnk")
+
+        if os.path.exists(shortcut):
+            return
+
+        ps_script = (
+            "$ws = New-Object -ComObject WScript.Shell; "
+            f"$sc = $ws.CreateShortcut('{shortcut}'); "
+            f"$sc.TargetPath = '{exe_path}'; "
+            f"$sc.WorkingDirectory = '{os.path.dirname(exe_path)}'; "
+            "$sc.Description = 'ChainMind Network Node'; "
+            f"$sc.IconLocation = '{exe_path},0'; "
+            "$sc.Save()"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  Resolve paths — works both frozen (PyInstaller) and plain Python
 # ─────────────────────────────────────────────────────────────────────────────
