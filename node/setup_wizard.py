@@ -156,7 +156,7 @@ def _generate_encryption_key() -> str:
         return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
 
 
-def activate_node(email: str, password: str) -> Optional[dict]:
+def activate_node(email: str, password: str, node_name: str = "") -> Optional[dict]:
     """
     Call the ChainMind central server to register / re-activate this node.
 
@@ -165,9 +165,12 @@ def activate_node(email: str, password: str) -> Optional[dict]:
     """
     try:
         import httpx
+        payload: dict = {"email": email, "password": password}
+        if node_name:
+            payload["node_name"] = node_name
         resp = httpx.post(
             REGISTER_URL,
-            json={"email": email, "password": password},
+            json=payload,
             timeout=15,
             follow_redirects=True,
         )
@@ -247,7 +250,7 @@ def run_wizard(cfg: dict) -> dict:
         print()
         print("     Connecting to chainmind.com.ng…")
         try:
-            result = activate_node(email, password)
+            result = activate_node(email, password, node_name=node_cfg.get("name", ""))
             # ── Write secrets received from server ──────────
             central_cfg["enabled"]     = True
             central_cfg["url"]         = "https://chainmind.com.ng"
