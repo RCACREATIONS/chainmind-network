@@ -228,14 +228,14 @@ def run_wizard(cfg: dict) -> dict:
 
     # ── 1. Node name ─────────────────────────────────────────
     default_name = node_cfg.get("name", "") or f"{_get_local_hostname()}-node"
-    print("1/4  Node Name")
+    print("1/5  Node Name")
     print("     This is shown in the network directory and your web dashboard.")
     node_name = _prompt("     Node name", default=default_name)
     node_cfg["name"] = node_name
     print()
 
     # ── 2. Node port ─────────────────────────────────────────
-    print("2/4  API Port")
+    print("2/5  API Port")
     print("     The port this node listens on (default 8000).")
     port_str = _prompt("     Port", default=str(node_cfg.get("port", 8000)))
     try:
@@ -245,7 +245,7 @@ def run_wizard(cfg: dict) -> dict:
     print()
 
     # ── 3. Public URL ────────────────────────────────────────
-    print("3/4  Public URL  (optional)")
+    print("3/5  Public URL  (optional)")
     print("     If this node is accessible from the internet, enter its public URL.")
     print("     Leave blank to let the node auto-detect your public IP.")
     pub_url = _prompt("     Public URL (e.g. http://203.0.113.1:8000)", required=False)
@@ -253,58 +253,84 @@ def run_wizard(cfg: dict) -> dict:
     print()
 
     # ── 4. Connect to ChainMind Network ─────────────────────
-    print("4/4  Connect to ChainMind Network")
+    print("4/5  Connect to ChainMind Network")
     print("     Log in to chainmind.com.ng to register your node and get")
     print("     a node secret.  Your password is never stored on this machine.")
     print()
 
+    _login_succeeded = False
     already_activated = bool(central_cfg.get("node_secret", "").strip())
     if already_activated:
         print("     ✅  This node is already connected to the network.")
         reactivate = _prompt_yn("     Re-activate (re-link to your account)?", default=False)
         if not reactivate:
-            print()
-            _finalize_local_secrets(node_cfg, privacy_cfg)
-            return _print_summary(cfg)
+            _login_succeeded = True  # already connected, skip to pairing token step
+        else:
+            already_activated = False  # force re-login
 
-    # Try automatic login (up to 3 attempts)
-    for attempt in range(1, 4):
-        print(f"     ChainMind account login{' (attempt ' + str(attempt) + '/3)' if attempt > 1 else ''}:")
-        email    = _prompt("     Email")
-        password = _prompt_password("     Password")
-        print()
-        print("     Connecting to chainmind.com.ng…")
-        try:
-            result = activate_node(email, password, node_name=node_cfg.get("name", ""))
-            # Write node_secret received from server
-            central_cfg["enabled"]     = True
-            central_cfg["url"]         = "https://chainmind.com.ng"
-            central_cfg["node_secret"] = result["node_secret"]
-            # Write node_id to data/ for gossip protocol
-            _write_node_id(result["node_id"])
-            # Generate local-only secrets
-            _finalize_local_secrets(node_cfg, privacy_cfg)
-            print(f"     ✅  Connected!  Welcome, {result['username']}.")
-            print(f"     Node ID: {result['node_id'][:8]}…")
+    if not already_activated:
+        # Try automatic login (up to 3 attempts)
+        for attempt in range(1, 4):
+            print(f"     ChainMind account login{' (attempt ' + str(attempt) + '/3)' if attempt > 1 else ''}:")
+            email    = _prompt("     Email")
+            password = _prompt_password("     Password")
             print()
-            break
-        except ValueError as e:
-            print(f"     ❌  {e}")
-            if attempt == 3:
+            print("     Connecting to chainmind.com.ng…")
+            try:
+                result = activate_node(email, password, node_name=node_cfg.get("name", ""))
+                # Write node_secret received from server
+                central_cfg["enabled"]     = True
+                central_cfg["url"]         = "https://chainmind.com.ng"
+                central_cfg["node_secret"] = result["node_secret"]
+                # Write node_id to data/ for gossip protocol
+                _write_node_id(result["node_id"])
+                # Generate local-only secrets
+                _finalize_local_secrets(node_cfg, privacy_cfg)
+                print(f"     ✅  Connected!  Welcome, {result['username']}.")
+                print(f"     Node ID: {result['node_id'][:8]}…")
                 print()
-                print("     Too many failed attempts. Skipping — you can reconnect later")
-                print("     from Settings → Reconnect Account in the dashboard.")
+                _login_succeeded = True
+                break
+            except ValueError as e:
+                print(f"     ❌  {e}")
+                if attempt == 3:
+                    print()
+                    print("     Too many failed attempts. Skipping — you can reconnect later")
+                    print("     from Settings → Reconnect Account in the dashboard.")
+                    central_cfg["enabled"] = False
+                    _finalize_local_secrets(node_cfg, privacy_cfg)
+                else:
+                    print()
+            except ConnectionError as e:
+                print(f"     ⚠   {e}")
+                print("     Cannot reach chainmind.com.ng — check your internet connection.")
+                print("     You can reconnect later from Settings → Reconnect Account in the dashboard.")
                 central_cfg["enabled"] = False
                 _finalize_local_secrets(node_cfg, privacy_cfg)
-            else:
-                print()
-        except ConnectionError as e:
-            print(f"     ⚠   {e}")
-            print("     Cannot reach chainmind.com.ng — check your internet connection.")
-            print("     You can reconnect later from Settings → Reconnect Account in the dashboard.")
-            central_cfg["enabled"] = False
-            _finalize_local_secrets(node_cfg, privacy_cfg)
-            break
+                break
+
+    # ── 5. Link Web Account (pairing token) ──────────────────
+    print("5/5  Link Web Account  (optional — recommended)")
+    if _login_succeeded:
+        print("     Generate a one-time token on chainmind.com.ng to link this node")
+        print("     to your web account for earnings tracking and the leaderboard.")
+    else:
+        print("     If you have a chainmind.com.ng account, you can still link this")
+        print("     node using a one-time pairing token from your web dashboard.")
+    print()
+    print("     Steps:")
+    print("     1. Open https://chainmind.com.ng/dashboard/node-settings.php")
+    print("     2. Click 'Generate Token' — it expires in 10 minutes")
+    print("     3. Copy and paste the token below")
+    print()
+    link_token = _prompt("     Pairing token (press Enter to skip)", required=False)
+    if link_token.strip():
+        cfg["_pending_link_token"] = link_token.strip()
+        print("     ✅  Token saved — the node will link your account on first startup.")
+    else:
+        print("     Skipped — you can link later from ⚙️ Settings → Link Web Account")
+        print("     in the dashboard.")
+    print()
 
     return _print_summary(cfg)
 
