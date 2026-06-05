@@ -177,6 +177,7 @@ async def stats(_auth=Depends(require_auth)):
     nxt = next_tier_info(tier, tasks)
     s["reputation"] = {**rep, **nxt}
     s["peers_online"] = len(get_online_peers(con))
+    s["central_secret_invalid"] = central.secret_invalid if central else False
     return s
 
 # ── System / Hardware ─────────────────────────────────────────────────────────
