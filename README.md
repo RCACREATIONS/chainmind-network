@@ -1,30 +1,44 @@
-# IntelliChain AI Node
+# ChainMind Network
 
-Lightweight Python AI node for the Chainmind decentralized intelligence protocol.  
-**Runs fully offline. No cloud. No API keys.**
+> **Decentralized AI infrastructure — run a node, earn IQ.**
+
+ChainMind is a peer-to-peer intelligence protocol where anyone can contribute compute, run local AI models, and earn rewards. Every node is fully self-contained: no cloud dependency, no API keys, no data leaving your machine.
 
 ---
 
-## What's inside
+## How it works
 
-| File / Folder | Purpose |
-|---|---|
-| `node/server.py` | FastAPI node — REST + WebSocket endpoints |
-| `node/ollama_client.py` | Async wrapper around Ollama's local HTTP API |
-| `node/tasks.py` | Async task queue and inference processor |
-| `node/dashboard.py` | Streamlit dashboard (stats, models, chat, log) |
-| `node/cli.py` | Typer CLI — pull models, ask questions, check status |
-| `node/db.py` | SQLite layer — tasks, stats, IQ earnings |
-| `config.yaml` | All config in one place (ports, model catalog) |
-| `requirements.txt` | Python dependencies |
+Your machine runs a local LLM through [Ollama](https://ollama.com). ChainMind wraps it with a lightweight node server that handles task queuing, streaming inference, and on-device reward tracking. When real on-chain integration ships, your accumulated IQ balance carries over automatically.
+
+```
+Client Request
+      │
+      ▼
+ ChainMind Node  (port 8000)
+  ├── REST API   — task queue, model management, stats
+  ├── WebSocket  — streaming token-by-token inference
+  └── Task Queue
+          │
+          ▼
+   Ollama  (port 11434)
+          │
+          ▼
+   Local LLM  (tinyllama · mistral · llama3 · …)
+          │
+          ▼
+   SQLite  data/node.db
+```
 
 ---
 
 ## Requirements
 
-- Python 3.10+
-- ~600 MB free disk (for TinyLlama, the smallest model)
-- Internet access only for initial model download
+| Requirement | Detail |
+|---|---|
+| Python | 3.10 or higher |
+| Disk space | 350 MB minimum (qwen2:0.5b) |
+| Internet | Only needed once, for the initial model pull |
+| OS | Linux, macOS, Windows |
 
 ---
 
@@ -32,8 +46,7 @@ Lightweight Python AI node for the Chainmind decentralized intelligence protocol
 
 **Linux / macOS**
 ```bash
-chmod +x install.sh start.sh
-./install.sh
+chmod +x install.sh && ./install.sh
 ```
 
 **Windows**
@@ -41,44 +54,40 @@ chmod +x install.sh start.sh
 install.bat
 ```
 
-The installer will:
-1. Create a Python virtual environment
-2. Install all dependencies
-3. Install the Ollama CLI (if not already installed)
-4. Create the `data/` directory
+The installer creates a virtual environment, installs dependencies, and sets up Ollama if it isn't already present.
 
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
-# 1. Pull the smallest model (~600 MB)
+# Pull a model (choose any from the catalog below)
 ./start.sh model pull tinyllama
 
-# 2. Start the node (leave this terminal running)
+# Start the node
 ./start.sh node
 
-# 3. Open the dashboard (in a second terminal)
+# Open the dashboard (separate terminal)
 ./start.sh dashboard
 
-# OR start everything at once
+# Or launch everything at once
 ./start.sh all
 ```
 
 ---
 
-## Available Models
+## Model catalog
 
 ```bash
-./start.sh model catalog      # browse all models by size
-./start.sh model list         # show installed models
+./start.sh model catalog   # browse all options
+./start.sh model list      # show what's installed
 ```
 
-| Size | Model | Disk |
+| Tier | Model | Size |
 |---|---|---|
-| Tiny | tinyllama | ~600 MB |
 | Tiny | qwen2:0.5b | ~350 MB |
-| Tiny | phi3:mini | ~2.3 GB |
+| Tiny | tinyllama | ~600 MB |
+| Compact | phi3:mini | ~2.3 GB |
 | Small | llama3.2:3b | ~2.0 GB |
 | Medium | mistral | ~4.1 GB |
 | Medium | llama3.1:8b | ~4.7 GB |
@@ -89,48 +98,48 @@ The installer will:
 ## Usage
 
 ```bash
-# One-shot query from terminal
-./start.sh ask "Explain quantum entanglement in one sentence"
-./start.sh ask "Write a Python function to reverse a string" --model mistral
+# Ask a question directly from the terminal
+./start.sh ask "Summarize the key ideas behind proof-of-work"
+./start.sh ask "Write a Python function to reverse a linked list" --model mistral
 
-# Node health check
+# Check node health
 ./start.sh status
 ```
 
-### REST API (when node is running on port 8000)
+### REST API
 
 ```bash
 # Health check
 curl http://localhost:8000/health
 
-# Queue an inference task
+# Submit an inference task
 curl -X POST http://localhost:8000/infer \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Hello world", "model": "tinyllama"}'
+  -d '{"prompt": "Explain tokenomics in one paragraph", "model": "tinyllama"}'
 
-# Check task result
+# Poll for result
 curl http://localhost:8000/tasks/<task_id>
 
-# List local models
+# List installed models
 curl http://localhost:8000/models
 
-# Pull a model
+# Pull a new model
 curl -X POST http://localhost:8000/models/pull \
   -H "Content-Type: application/json" \
-  -d '{"model": "tinyllama"}'
+  -d '{"model": "mistral"}'
 
-# Node stats (tasks completed, tokens, IQ earned)
+# Node stats
 curl http://localhost:8000/stats
 ```
 
-### WebSocket — streaming inference
+### WebSocket streaming
 
 ```python
 import asyncio, websockets, json
 
-async def chat():
+async def stream():
     async with websockets.connect("ws://localhost:8000/ws/infer") as ws:
-        await ws.send(json.dumps({"prompt": "Tell me a joke", "model": "tinyllama"}))
+        await ws.send(json.dumps({"prompt": "What is a blockchain?", "model": "tinyllama"}))
         async for msg in ws:
             data = json.loads(msg)
             if data.get("chunk"):
@@ -138,25 +147,27 @@ async def chat():
             if data.get("done"):
                 break
 
-asyncio.run(chat())
+asyncio.run(stream())
 ```
 
 ---
 
 ## Dashboard
 
-Open `http://localhost:8501` after running `./start.sh dashboard`
+Visit `http://localhost:8501` after running `./start.sh dashboard`.
 
-- **Overview** — uptime, total tasks, tokens, IQ earned
-- **Models** — install / delete models by size tier
-- **Chat** — interactive chat with any installed model
-- **Tasks** — full task log with timing and token counts
+| Tab | What you'll find |
+|---|---|
+| Overview | Uptime, total tasks completed, tokens processed, IQ earned |
+| Models | Install or remove models by size tier |
+| Chat | Live chat with any installed model |
+| Tasks | Full task log with timing and token counts |
 
 ---
 
 ## Configuration
 
-Edit `config.yaml` to change ports, node name, or model catalog.
+All settings live in `config.yaml`.
 
 ```yaml
 node:
@@ -172,39 +183,44 @@ dashboard:
 
 ---
 
-## IQ Token Simulation
+## IQ rewards
 
-Every completed task earns simulated IQ tokens:
+Every completed inference task earns simulated IQ tokens, tracked locally:
 
 ```
 IQ = (tokens_in + tokens_out) × 0.001
 ```
 
-Tracked locally in `data/node.db`. Real on-chain integration is Phase 1.
+Stored in `data/node.db`. Phase 1 will connect this to the live chain — your balance carries over.
 
 ---
 
-## Architecture (Phase 0)
+## Project structure
 
-```
-User / Client
-     │
-     ▼
-FastAPI Node  (port 8000)
-  ├── REST API  — /infer, /tasks, /models, /stats
-  ├── WebSocket — /ws/infer (streaming), /ws/pull (model download)
-  └── Task Queue (asyncio)
-          │
-          ▼
-   Ollama Server  (port 11434)
-          │
-          ▼
-   Local LLM Model (tinyllama, mistral, llama3, …)
-          │
-          ▼
-   SQLite  data/node.db
-```
+| Path | Role |
+|---|---|
+| `node/server.py` | FastAPI node — REST and WebSocket endpoints |
+| `node/ollama_client.py` | Async wrapper around Ollama's local API |
+| `node/tasks.py` | Async task queue and inference processor |
+| `node/dashboard.py` | Streamlit dashboard |
+| `node/cli.py` | CLI — pull models, query, check status |
+| `node/db.py` | SQLite — tasks, stats, IQ ledger |
+| `config.yaml` | Ports, node name, model catalog |
 
 ---
 
-*IntelliChain — Decentralized Intelligence Protocol. Phase 0 Node.*
+## Roadmap
+
+- **Phase 0** ✅ — Local node, offline inference, IQ simulation, dashboard
+- **Phase 1** — On-chain IQ integration, node registry, peer discovery
+- **Phase 2** — Multi-node task routing, reputation system, token economy
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Please open an issue before starting significant work so we can discuss direction.
+
+---
+
+*ChainMind — Decentralized Intelligence Protocol*
