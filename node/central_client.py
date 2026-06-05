@@ -38,11 +38,12 @@ class CentralClient:
         self.ollama       = ollama_client
         self.con          = con
 
-        self._jobs_done   = 0
-        self._iq_earned   = 0.0
-        self._reputation  = 100.0
-        self._running     = False
-        self._public_ip   = None
+        self._jobs_done      = 0
+        self._iq_earned      = 0.0
+        self._reputation     = 100.0
+        self._running        = False
+        self._public_ip      = None
+        self._secret_invalid = False  # set True on 403 — prompts user to reconnect
 
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5, read=90, write=10, pool=5),
@@ -122,9 +123,13 @@ class CentralClient:
         self._running = False
         await self._http.aclose()
 
+    @property
+    def secret_invalid(self) -> bool:
+        return self._secret_invalid
+
     async def _heartbeat_loop(self):
         await self._send_heartbeat()
-        while self._running:
+        while self._running and not self._secret_invalid:
             await asyncio.sleep(self.hb_ivl)
             await self._send_heartbeat()
 
@@ -161,13 +166,20 @@ class CentralClient:
                 data = r.json()
                 net = data.get("network", {})
                 log.debug(f"Heartbeat OK — {net.get('online_nodes')} nodes online")
+            elif r.status_code == 403:
+                self._secret_invalid = True
+                self._running = False
+                log.error(
+                    "Heartbeat rejected with 403 Invalid node secret. "
+                    "Go to ⚙️ Settings → Reconnect Account in the dashboard to fix this."
+                )
             else:
                 log.warning(f"Heartbeat returned {r.status_code}: {r.text[:200]}")
         except Exception as e:
             log.warning(f"Heartbeat failed: {e}")
 
     async def _poll_loop(self):
-        while self._running:
+        while self._running and not self._secret_invalid:
             try:
                 await self._poll_once()
             except Exception as e:
