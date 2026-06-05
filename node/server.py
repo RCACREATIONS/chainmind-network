@@ -402,7 +402,8 @@ class LinkRequest(BaseModel):
     token: str
 
 class ReconnectRequest(BaseModel):
-    token: str
+    email: str
+    password: str
 
 class WithdrawRequest(BaseModel):
     iq_amount: float
@@ -423,25 +424,26 @@ async def account_link(req: LinkRequest, _auth=Depends(require_auth)):
 @app.post("/account/reconnect")
 async def account_reconnect(req: ReconnectRequest, _auth=Depends(require_auth)):
     """
-    Re-pair this node using a fresh pairing token from the web dashboard.
-    Works even when the central client is offline (no node_secret yet).
-    Calls pair.php, writes node_secret + node_id to config.yaml, and
-    updates the live central client if it is running.
+    Re-register this node using email + password — calls register.php to get a
+    fresh node_secret.  Works even when the central client is offline.
+    Writes node_secret + node_id to config.yaml and hot-patches the live
+    central client if it is running.
     """
     import httpx as _hx
     import os as _os
 
-    token = req.token.strip()
-    if not token:
-        return {"ok": False, "error": "token is required"}
+    email    = req.email.strip()
+    password = req.password
+    if not email or not password:
+        return {"ok": False, "error": "email and password are required"}
 
-    pair_url = "https://chainmind.com.ng/api/node/pair.php"
+    register_url = "https://chainmind.com.ng/api/node/register.php"
     try:
         async with _hx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.post(pair_url, json={"token": token})
+            resp = await client.post(register_url, json={"email": email, "password": password})
         data = resp.json()
     except Exception as exc:
-        return {"ok": False, "error": f"Could not reach pairing server: {exc}"}
+        return {"ok": False, "error": f"Could not reach chainmind.com.ng: {exc}"}
 
     if not (resp.status_code == 200 and data.get("ok")):
         return {"ok": False, "error": data.get("error", f"Server returned {resp.status_code}")}

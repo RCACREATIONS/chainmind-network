@@ -252,43 +252,37 @@ def run_wizard(cfg: dict) -> dict:
     node_cfg["public_url"] = pub_url
     print()
 
-    # ── 4. Connect to ChainMind Network (pairing token) ─────
+    # ── 4. Connect to ChainMind Network ─────────────────────
     print("4/4  Connect to ChainMind Network")
-    print()
-    print("     To activate your node:")
-    print("     1. Open https://chainmind.com.ng/dashboard/node-settings.php")
-    print("     2. Log in if prompted")
-    print("     3. Copy the 10-minute pairing token shown on that page")
-    print("     4. Paste it below")
+    print("     Log in to chainmind.com.ng to register your node and get")
+    print("     a node secret.  Your password is never stored on this machine.")
     print()
 
     already_activated = bool(central_cfg.get("node_secret", "").strip())
     if already_activated:
         print("     ✅  This node is already connected to the network.")
-        reactivate = _prompt_yn("     Re-pair with your account?", default=False)
+        reactivate = _prompt_yn("     Re-activate (re-link to your account)?", default=False)
         if not reactivate:
             print()
             _finalize_local_secrets(node_cfg, privacy_cfg)
             return _print_summary(cfg)
 
-    # Try pairing token flow (up to 3 attempts)
+    # Try automatic login (up to 3 attempts)
     for attempt in range(1, 4):
-        if attempt > 1:
-            print(f"     (Attempt {attempt}/3 — generate a fresh token if the last one expired)")
-        token = _prompt("     Pairing Token", required=False)
-        if not token:
-            print("     Skipped — you can connect later from the Settings page in the dashboard.")
-            central_cfg["enabled"] = False
-            _finalize_local_secrets(node_cfg, privacy_cfg)
-            break
+        print(f"     ChainMind account login{' (attempt ' + str(attempt) + '/3)' if attempt > 1 else ''}:")
+        email    = _prompt("     Email")
+        password = _prompt_password("     Password")
         print()
-        print("     Verifying token with chainmind.com.ng…")
+        print("     Connecting to chainmind.com.ng…")
         try:
-            result = activate_node_with_token(token)
+            result = activate_node(email, password, node_name=node_cfg.get("name", ""))
+            # Write node_secret received from server
             central_cfg["enabled"]     = True
             central_cfg["url"]         = "https://chainmind.com.ng"
             central_cfg["node_secret"] = result["node_secret"]
+            # Write node_id to data/ for gossip protocol
             _write_node_id(result["node_id"])
+            # Generate local-only secrets
             _finalize_local_secrets(node_cfg, privacy_cfg)
             print(f"     ✅  Connected!  Welcome, {result['username']}.")
             print(f"     Node ID: {result['node_id'][:8]}…")
@@ -298,9 +292,10 @@ def run_wizard(cfg: dict) -> dict:
             print(f"     ❌  {e}")
             if attempt == 3:
                 print()
-                print("     Too many failed attempts.")
-                print("     You can reconnect later from Settings → Reconnect Account in the dashboard.")
+                print("     Too many failed attempts. Skipping — you can reconnect later")
+                print("     from Settings → Reconnect Account in the dashboard.")
                 central_cfg["enabled"] = False
+                _finalize_local_secrets(node_cfg, privacy_cfg)
             else:
                 print()
         except ConnectionError as e:
@@ -308,6 +303,7 @@ def run_wizard(cfg: dict) -> dict:
             print("     Cannot reach chainmind.com.ng — check your internet connection.")
             print("     You can reconnect later from Settings → Reconnect Account in the dashboard.")
             central_cfg["enabled"] = False
+            _finalize_local_secrets(node_cfg, privacy_cfg)
             break
 
     return _print_summary(cfg)

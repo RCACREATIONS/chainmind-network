@@ -1436,23 +1436,24 @@ elif page == "⚙️ Settings":
         st.success("✅ Node is connected to chainmind.com.ng")
         _reconnect_expanded = False
     else:
-        st.warning("⚠️ Node is **not connected** to the ChainMind network. Paste a pairing token to reconnect.")
+        st.warning("⚠️ Node is **not connected** to the ChainMind network. Log in below to reconnect.")
         _reconnect_expanded = True
 
-    with st.expander("Reconnect / Re-pair with your web account", expanded=_reconnect_expanded):
+    with st.expander("Reconnect / Re-activate with your web account", expanded=_reconnect_expanded):
         st.markdown(
-            "**Steps:**\n"
-            "1. Open [chainmind.com.ng/dashboard/node-settings.php](https://chainmind.com.ng/dashboard/node-settings.php)\n"
-            "2. Log in if prompted\n"
-            "3. Copy the **10-minute pairing token** shown on that page\n"
-            "4. Paste it below and click **Connect**"
+            "Log in with your **chainmind.com.ng** account to get a fresh node secret. "
+            "Your password is sent securely over HTTPS and never stored here."
         )
         with st.form("reconnect_form"):
-            _rc_token = st.text_input("Pairing Token", placeholder="Paste token from web dashboard…")
-            _rc_submit = st.form_submit_button("🔗 Connect Node", type="primary")
-            if _rc_submit and _rc_token.strip():
-                with st.spinner("Verifying token with chainmind.com.ng…"):
-                    _rc_result = post("/account/reconnect", {"token": _rc_token.strip()})
+            _rc_email    = st.text_input("Email", placeholder="your@email.com")
+            _rc_password = st.text_input("Password", type="password", placeholder="••••••••")
+            _rc_submit   = st.form_submit_button("🔗 Connect Node", type="primary")
+            if _rc_submit and _rc_email.strip() and _rc_password:
+                with st.spinner("Connecting to chainmind.com.ng…"):
+                    _rc_result = post("/account/reconnect", {
+                        "email": _rc_email.strip(),
+                        "password": _rc_password,
+                    })
                 if _rc_result.get("ok"):
                     st.success(
                         f"✅ Connected as **{_rc_result.get('username', 'your account')}**! "
@@ -1461,9 +1462,9 @@ elif page == "⚙️ Settings":
                     st.balloons()
                     st.cache_data.clear()
                 else:
-                    st.error(f"❌ {_rc_result.get('error', 'Connection failed — check the token and try again.')}")
+                    st.error(f"❌ {_rc_result.get('error', 'Connection failed — check your credentials.')}")
             elif _rc_submit:
-                st.warning("Please paste a pairing token first.")
+                st.warning("Please enter your email and password.")
 
     st.caption("Edit `config.yaml` in the node folder to change these settings.")
     st.divider()
