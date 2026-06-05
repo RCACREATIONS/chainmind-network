@@ -401,6 +401,9 @@ async def ws_pull(ws: WebSocket, model: str = "tinyllama"):
 class LinkRequest(BaseModel):
     token: str
 
+class ReconnectRequest(BaseModel):
+    token: str
+
 class WithdrawRequest(BaseModel):
     iq_amount: float
     method: str = "crypto"
@@ -415,6 +418,72 @@ async def account_link(req: LinkRequest, _auth=Depends(require_auth)):
         return {"ok": False, "error": "Central client not running"}
     result = await central.link_account(req.token.strip())
     return result
+
+
+@app.post("/account/reconnect")
+async def account_reconnect(req: ReconnectRequest, _auth=Depends(require_auth)):
+    """
+    Re-pair this node using a fresh pairing token from the web dashboard.
+    Works even when the central client is offline (no node_secret yet).
+    Calls pair.php, writes node_secret + node_id to config.yaml, and
+    updates the live central client if it is running.
+    """
+    import httpx as _hx
+    import os as _os
+
+    token = req.token.strip()
+    if not token:
+        return {"ok": False, "error": "token is required"}
+
+    pair_url = "https://chainmind.com.ng/api/node/pair.php"
+    try:
+        async with _hx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.post(pair_url, json={"token": token})
+        data = resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not reach pairing server: {exc}"}
+
+    if not (resp.status_code == 200 and data.get("ok")):
+        return {"ok": False, "error": data.get("error", f"Server returned {resp.status_code}")}
+
+    node_secret = data["node_secret"]
+    node_id     = data["node_id"]
+    username    = data.get("username", "")
+
+    # Write node_id to data/node_id.txt
+    try:
+        cfg_path = Path(_os.environ.get("CHAINMIND_CONFIG", "")) or Path("config.yaml")
+        data_dir = cfg_path.parent / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "node_id.txt").write_text(node_id)
+    except Exception:
+        pass
+
+    # Update config.yaml atomically
+    try:
+        cfg_file = Path(_os.environ.get("CHAINMIND_CONFIG", "config.yaml"))
+        with open(cfg_file) as f:
+            raw_cfg = yaml.safe_load(f) or {}
+        raw_cfg.setdefault("central", {})
+        raw_cfg["central"]["node_secret"] = node_secret
+        raw_cfg["central"]["enabled"]     = True
+        raw_cfg["central"]["url"]         = "https://chainmind.com.ng"
+        with open(cfg_file, "w") as f:
+            yaml.safe_dump(raw_cfg, f, default_flow_style=False, sort_keys=False)
+    except Exception as exc:
+        return {"ok": False, "error": f"Saved credentials but could not write config.yaml: {exc}"}
+
+    # Hot-update the running central client if available
+    if central:
+        central.secret = node_secret
+        central.node_id = node_id
+        central.enabled = True
+        central._http.headers.update({
+            "X-Node-Secret": node_secret,
+            "X-Node-Id":     node_id,
+        })
+
+    return {"ok": True, "username": username, "node_id": node_id}
 
 @app.post("/account/withdraw")
 async def account_withdraw(req: WithdrawRequest, _auth=Depends(require_auth)):
