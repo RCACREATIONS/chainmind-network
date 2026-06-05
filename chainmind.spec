@@ -166,8 +166,8 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName":             "ChainMind Node",
             "CFBundleDisplayName":      "ChainMind Network",
-            "CFBundleVersion":          "1.2.4",
-            "CFBundleShortVersionString": "1.2.4",
+            "CFBundleVersion":          Path("VERSION").read_text().strip() if Path("VERSION").exists() else "1.0.0",
+            "CFBundleShortVersionString": Path("VERSION").read_text().strip() if Path("VERSION").exists() else "1.0.0",
             "CFBundleExecutable":       "ChainMind-Node",
             "CFBundleIdentifier":       "com.chainmind.network",
             "CFBundlePackageType":      "APPL",

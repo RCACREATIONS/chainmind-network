@@ -147,7 +147,7 @@ def banner():
 # ─────────────────────────────────────────────────────────────────────────────
 UPDATE_MANIFEST_URLS = [
     "https://chainmind.com.ng/api/release/latest.json",
-    "https://raw.githubusercontent.com/chainmind-network/chainmind-node/main/release/latest.json",
+    "https://raw.githubusercontent.com/RCACREATIONS/chainmind-network/main/release/latest.json",
 ]
 
 

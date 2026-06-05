@@ -52,7 +52,7 @@ from typing import Callable, Optional
 # ── Constants ──────────────────────────────────────────────────────────────────
 UPDATE_MANIFEST_URLS = [
     "https://chainmind.com.ng/api/release/latest.json",
-    "https://raw.githubusercontent.com/chainmind-network/chainmind-node/main/release/latest.json",
+    "https://raw.githubusercontent.com/RCACREATIONS/chainmind-network/main/release/latest.json",
 ]
 
 INSTALL_DIR  = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent.parent
