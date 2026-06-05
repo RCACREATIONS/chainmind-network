@@ -23,8 +23,9 @@ elif getattr(sys, "frozen", False):
 else:
     _cfg_path = Path(__file__).parent.parent / "config.yaml"
 
+REGISTER_URL = "https://chainmind.com.ng/api/node/register.php"
+
 # Full default config — always written so ALL keys exist after first run.
-# Users edit config.yaml; the wizard only overrides what it asks about.
 _DEFAULT_CONFIG: dict = {
     "node": {
         "name": "chainmind-node-1",
@@ -68,6 +69,7 @@ _DEFAULT_CONFIG: dict = {
     },
     "privacy": {
         "encrypt_tasks": True,
+        "encryption_key": "",
         "mask_prompts_in_dashboard": True,
     },
     "models": {
@@ -128,11 +130,56 @@ def _prompt_yn(msg: str, default: bool = True) -> bool:
     return val.startswith("y")
 
 
+def _prompt_password(msg: str) -> str:
+    """Prompt for a password, hiding input if possible."""
+    try:
+        import getpass
+        return getpass.getpass(f"{msg}: ").strip()
+    except Exception:
+        return input(f"{msg}: ").strip()
+
+
 def _get_local_hostname() -> str:
     try:
         return socket.gethostname()
     except Exception:
         return "my-chainmind-node"
+
+
+def _generate_encryption_key() -> str:
+    """Generate a Fernet-compatible encryption key locally."""
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet.generate_key().decode()
+    except ImportError:
+        import base64
+        return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+
+
+def activate_node(email: str, password: str) -> Optional[dict]:
+    """
+    Call the ChainMind central server to register / re-activate this node.
+
+    Returns dict with keys: node_secret, node_id, username
+    Returns None on failure (network error, wrong credentials, server down).
+    """
+    try:
+        import httpx
+        resp = httpx.post(
+            REGISTER_URL,
+            json={"email": email, "password": password},
+            timeout=15,
+            follow_redirects=True,
+        )
+        data = resp.json()
+        if resp.status_code == 200 and data.get("ok"):
+            return data
+        # Surface the server's error message to the user
+        raise ValueError(data.get("error", f"Server returned {resp.status_code}"))
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ConnectionError(f"Could not reach {REGISTER_URL}: {exc}") from exc
 
 
 def run_wizard(cfg: dict) -> dict:
@@ -146,19 +193,20 @@ def run_wizard(cfg: dict) -> dict:
     print("This wizard configures your node. You can edit config.yaml later.")
     print()
 
-    node_cfg = cfg.setdefault("node", {})
+    node_cfg    = cfg.setdefault("node", {})
     central_cfg = cfg.setdefault("central", {})
+    privacy_cfg = cfg.setdefault("privacy", {})
 
-    # ── Node name ────────────────────────────────────────────
+    # ── 1. Node name ─────────────────────────────────────────
     default_name = node_cfg.get("name", "") or f"{_get_local_hostname()}-node"
-    print("1/5  Node Name")
+    print("1/4  Node Name")
     print("     This is shown in the network directory and your web dashboard.")
     node_name = _prompt("     Node name", default=default_name)
     node_cfg["name"] = node_name
     print()
 
-    # ── Node port ─────────────────────────────────────────────
-    print("2/5  API Port")
+    # ── 2. Node port ─────────────────────────────────────────
+    print("2/4  API Port")
     print("     The port this node listens on (default 8000).")
     port_str = _prompt("     Port", default=str(node_cfg.get("port", 8000)))
     try:
@@ -167,77 +215,116 @@ def run_wizard(cfg: dict) -> dict:
         node_cfg["port"] = 8000
     print()
 
-    # ── Public URL ────────────────────────────────────────────
-    print("3/5  Public URL  (optional)")
+    # ── 3. Public URL ────────────────────────────────────────
+    print("3/4  Public URL  (optional)")
     print("     If this node is accessible from the internet, enter its public URL.")
     print("     Leave blank to let the node auto-detect your public IP.")
     pub_url = _prompt("     Public URL (e.g. http://203.0.113.1:8000)", required=False)
     node_cfg["public_url"] = pub_url
     print()
 
-    # ── API token ─────────────────────────────────────────────
-    print("4/5  Node API Token")
-    existing_token = node_cfg.get("api_token", "")
-    if existing_token:
-        print(f"     An API token already exists: {existing_token[:12]}…")
-        regen = _prompt_yn("     Regenerate it?", default=False)
-        if regen:
-            node_cfg["api_token"] = secrets.token_hex(24)
-            print(f"     ✅ New token: {node_cfg['api_token']}")
-        else:
-            print("     Keeping existing token.")
-    else:
-        node_cfg["api_token"] = secrets.token_hex(24)
-        print(f"     ✅ Generated token: {node_cfg['api_token']}")
+    # ── 4. Connect to ChainMind Network ─────────────────────
+    print("4/4  Connect to ChainMind Network")
+    print("     Log in to chainmind.com.ng to activate your node and start")
+    print("     earning IQ tokens. Your password is sent securely over HTTPS")
+    print("     and never stored on this machine.")
     print()
 
-    # ── Central server / web account link ────────────────────
-    print("5/5  ChainMind Central Server")
-    central_url = central_cfg.get("url", "https://chainmind.com.ng")
-    print(f"     Central server: {central_url}")
-    enabled = _prompt_yn("     Connect to central server (recommended)?", default=True)
-    central_cfg["enabled"] = enabled
-    central_cfg["url"] = central_url
-
-    if enabled:
-        secret = central_cfg.get("node_secret", "")
-        if not secret:
+    already_activated = bool(central_cfg.get("node_secret", "").strip())
+    if already_activated:
+        print("     ✅  This node is already connected to the network.")
+        reactivate = _prompt_yn("     Re-activate (re-link to your account)?", default=False)
+        if not reactivate:
             print()
-            print("     ⚠  You need a node_secret from the central server.")
-            print("     Find it in your ChainMind web account → Node Settings → copy the NODE_SECRET.")
-            secret = _prompt("     node_secret (from config.php on the central server)", required=False)
-            central_cfg["node_secret"] = secret
-        else:
-            print(f"     node_secret: {'•' * 12} (already set)")
+            _finalize_local_secrets(node_cfg, privacy_cfg)
+            return _print_summary(cfg)
 
-        # Optionally link to web account now
+    # Try automatic login (up to 3 attempts)
+    for attempt in range(1, 4):
+        print(f"     ChainMind account login{' (attempt ' + str(attempt) + '/3)' if attempt > 1 else ''}:")
+        email    = _prompt("     Email")
+        password = _prompt_password("     Password")
         print()
-        link_now = _prompt_yn("     Link this node to your web account now?", default=True)
-        if link_now:
+        print("     Connecting to chainmind.com.ng…")
+        try:
+            result = activate_node(email, password)
+            # ── Write secrets received from server ──────────
+            central_cfg["enabled"]     = True
+            central_cfg["url"]         = "https://chainmind.com.ng"
+            central_cfg["node_secret"] = result["node_secret"]
+            # Write node_id to data/ for gossip protocol
+            _write_node_id(result["node_id"])
+            # ── Generate local-only secrets ─────────────────
+            _finalize_local_secrets(node_cfg, privacy_cfg)
+            print(f"     ✅  Connected!  Welcome, {result['username']}.")
+            print(f"     Node ID: {result['node_id'][:8]}…")
             print()
-            print("     Steps:")
-            print("     1. Open https://chainmind.com.ng/dashboard/node-settings.php")
-            print("     2. Copy the 10-minute pairing token shown on that page.")
-            link_token = _prompt("     Paste pairing token here (or press Enter to skip)", required=False)
-            if link_token:
-                # Store the pending token — central_client will send it on first heartbeat
-                cfg.setdefault("_pending_link_token", link_token)
-                print("     ✅ Token saved — your node will link automatically on first start.")
+            break
+        except ValueError as e:
+            print(f"     ❌  {e}")
+            if attempt == 3:
+                print()
+                print("     Too many failed attempts. Falling back to manual setup.")
+                _fallback_manual_secret(central_cfg)
             else:
-                print("     Skipped. You can link later from Node Settings → Link Web Account.")
-    print()
+                print()
+        except ConnectionError as e:
+            print(f"     ⚠   {e}")
+            print("     Switching to manual setup.")
+            print()
+            _fallback_manual_secret(central_cfg)
+            break
 
-    # ── Summary ───────────────────────────────────────────────
+    return _print_summary(cfg)
+
+
+def _finalize_local_secrets(node_cfg: dict, privacy_cfg: dict) -> None:
+    """Generate / refresh local-only secrets (api_token, encryption_key)."""
+    # API token: generated locally, never leaves this machine
+    if not node_cfg.get("api_token", "").strip():
+        node_cfg["api_token"] = secrets.token_hex(24)
+
+    # Encryption key: generated locally, never sent anywhere
+    if not privacy_cfg.get("encryption_key", "").strip():
+        privacy_cfg["encryption_key"] = _generate_encryption_key()
+        privacy_cfg["encrypt_tasks"]  = True
+
+
+def _write_node_id(node_id: str) -> None:
+    """Persist the server-assigned node_id to data/node_id.txt."""
+    try:
+        data_dir = _cfg_path.parent / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "node_id.txt").write_text(node_id)
+    except Exception:
+        pass  # non-fatal; node will generate one if missing
+
+
+def _fallback_manual_secret(central_cfg: dict) -> None:
+    """Ask the user to manually paste a node_secret from the web dashboard."""
+    print("     Manual activation:")
+    print("     1. Open https://chainmind.com.ng/dashboard/node-settings.php")
+    print("     2. Copy the NODE_SECRET shown there.")
+    secret = _prompt("     Paste NODE_SECRET here (or press Enter to skip)", required=False)
+    central_cfg["node_secret"] = secret
+    central_cfg["enabled"]     = bool(secret)
+    if not secret:
+        print("     Skipped — you can activate later from the Settings page.")
+
+
+def _print_summary(cfg: dict) -> dict:
+    node_cfg    = cfg.get("node", {})
+    central_cfg = cfg.get("central", {})
+    connected   = central_cfg.get("enabled") and bool(central_cfg.get("node_secret", ""))
     print("═══════════════════════════════════════════════")
-    print(f"  Node Name : {node_cfg['name']}")
-    print(f"  API Port  : {node_cfg['port']}")
+    print(f"  Node Name : {node_cfg.get('name', '—')}")
+    print(f"  API Port  : {node_cfg.get('port', 8000)}")
     print(f"  Public URL: {node_cfg.get('public_url') or '(auto-detect)'}")
-    print(f"  Central   : {'✅ Enabled' if enabled else '❌ Disabled'}")
+    print(f"  Network   : {'✅ Connected' if connected else '❌ Not connected'}")
     print("═══════════════════════════════════════════════")
     print()
     print("Config saved to config.yaml. Starting node…")
     print()
-
     return cfg
 
 
@@ -249,29 +336,22 @@ def maybe_run_wizard() -> dict:
     else:
         saved = {}
 
-    # Always deep-merge with defaults so new config keys are present even on
-    # existing installs that were created by an older wizard version.
     cfg = _deep_merge(_DEFAULT_CONFIG, saved)
 
-    node_name = cfg.get("node", {}).get("name", "")
+    node_name  = cfg.get("node", {}).get("name", "")
     needs_setup = (
         not node_name
         or node_name in ("chainmind-node-1", "my-chainmind-node")
     )
 
-    # Force wizard with env var (used by install scripts)
     if os.environ.get("CHAINMIND_SETUP") == "1":
         needs_setup = True
 
-    # --no-setup / CHAINMIND_NO_SETUP: always skip wizard when a config file
-    # already exists (used by the desktop shortcut so a returning user is never
-    # dropped back into the setup wizard just because the node name looks default).
     if os.environ.get("CHAINMIND_NO_SETUP") == "1" and _cfg_path.exists():
         needs_setup = False
 
     if needs_setup:
         cfg = run_wizard(cfg)
-        # Save updated config
         with open(_cfg_path, "w") as f:
             yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
