@@ -424,11 +424,18 @@ def _win_install_dir() -> Path:
 
 
 def _is_running_from_install_dir() -> bool:
-    """True when the frozen exe is already living in the install location."""
+    """True when the frozen exe is already living in the proper install location."""
     if not getattr(sys, "frozen", False):
         return True   # plain Python / dev mode — skip installer entirely
     try:
-        return Path(sys.executable).resolve().parent.resolve() == _win_install_dir().resolve()
+        exe = Path(sys.executable).resolve()
+        if sys.platform == "win32":
+            return exe.parent.resolve() == _win_install_dir().resolve()
+        elif sys.platform == "darwin":
+            # Running inside a .app bundle: …/ChainMind Network.app/Contents/MacOS/…
+            return ".app/Contents/MacOS" in str(exe)
+        else:
+            return exe.parent.resolve() == _linux_install_dir().resolve()
     except Exception:
         return True   # if in doubt, skip installer
 
@@ -592,6 +599,360 @@ def _win_uninstall() -> None:
         )
         subprocess.Popen(["cmd", "/c", str(bat)],
                          creationflags=subprocess.DETACHED_PROCESS)
+
+    print(f"{GREEN}  ChainMind Node has been uninstalled.{RESET}")
+    sys.exit(0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.6  macOS self-installer
+#
+#  On first run (frozen binary NOT inside a .app bundle) the launcher acts as
+#  an installer:
+#    1. Runs the setup wizard to collect node name / secrets
+#    2. Creates ~/Applications/ChainMind Network.app/ bundle structure
+#    3. Copies binary → Contents/MacOS/ChainMind Node
+#    4. Writes Contents/Info.plist + copies icon.icns → Contents/Resources/
+#    5. Creates a LaunchAgent plist → auto-start at login
+#    6. Registers app via 'open' so Finder/Dock recognise it
+#    7. Launches the installed app and exits the installer process
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mac_app_dir() -> Path:
+    """~/Applications/ChainMind Network.app"""
+    return Path.home() / "Applications" / "ChainMind Network.app"
+
+
+def _mac_binary_path() -> Path:
+    """The installed binary inside the .app bundle."""
+    return _mac_app_dir() / "Contents" / "MacOS" / "ChainMind Node"
+
+
+def _mac_launch_agent_plist() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / "com.chainmind.network.plist"
+
+
+def _mac_install(cfg: dict) -> None:
+    """
+    Build ~/Applications/ChainMind Network.app, install LaunchAgent, then
+    launch the installed copy and exit.  Always ends with sys.exit(0).
+    """
+    import shutil
+
+    app_dir     = _mac_app_dir()
+    macos_dir   = app_dir / "Contents" / "MacOS"
+    res_dir     = app_dir / "Contents" / "Resources"
+    binary_dst  = macos_dir / "ChainMind Node"
+    plist_path  = app_dir / "Contents" / "Info.plist"
+
+    print(f"\n{CYAN}  Installing ChainMind Network to:{RESET}")
+    print(f"  {app_dir}\n")
+
+    # ── 1. Build bundle directory structure ───────────────────────────────────
+    macos_dir.mkdir(parents=True, exist_ok=True)
+    res_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "Contents" / "MacOS" / "data" / "logs").mkdir(parents=True, exist_ok=True)
+
+    # ── 2. Copy executable ────────────────────────────────────────────────────
+    print(f"{CYAN}  Copying executable…{RESET}", end=" ", flush=True)
+    src_exe = Path(sys.executable).resolve()
+    shutil.copy2(str(src_exe), str(binary_dst))
+    os.chmod(str(binary_dst), 0o755)
+    print(f"{GREEN}done{RESET}")
+
+    # ── 3. Copy config.yaml + VERSION ────────────────────────────────────────
+    for fname in ("config.yaml", "VERSION"):
+        src = INSTALL_DIR / fname
+        if src.exists():
+            shutil.copy2(str(src), str(macos_dir / fname))
+
+    # ── 4. Copy icon into Resources ───────────────────────────────────────────
+    for candidate in [
+        BUNDLE_DIR  / "assets" / "icon.icns",
+        INSTALL_DIR / "assets" / "icon.icns",
+    ]:
+        if candidate.exists():
+            shutil.copy2(str(candidate), str(res_dir / "icon.icns"))
+            break
+
+    # ── 5. Write Info.plist ───────────────────────────────────────────────────
+    print(f"{CYAN}  Writing Info.plist…{RESET}", end=" ", flush=True)
+    version_str = "1.0.0"
+    try:
+        version_str = (macos_dir / "VERSION").read_text(encoding="utf-8",
+                                                         errors="ignore").strip().lstrip("v")
+    except Exception:
+        pass
+    plist_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>ChainMind Node</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.chainmind.network</string>
+    <key>CFBundleName</key>
+    <string>ChainMind Node</string>
+    <key>CFBundleDisplayName</key>
+    <string>ChainMind Network</string>
+    <key>CFBundleVersion</key>
+    <string>{version_str}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>{version_str}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>icon</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+"""
+    plist_path.write_text(plist_xml, encoding="utf-8")
+    print(f"{GREEN}done{RESET}")
+
+    # ── 6. LaunchAgent plist (auto-start at login) ────────────────────────────
+    print(f"{CYAN}  Installing LaunchAgent…{RESET}", end=" ", flush=True)
+    la_plist = _mac_launch_agent_plist()
+    la_plist.parent.mkdir(parents=True, exist_ok=True)
+    la_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.chainmind.network</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{binary_dst}</string>
+        <string>--no-setup</string>
+        <string>--no-browser</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>{app_dir}/Contents/MacOS/data/logs/launchagent.log</string>
+    <key>StandardErrorPath</key>
+    <string>{app_dir}/Contents/MacOS/data/logs/launchagent.log</string>
+</dict>
+</plist>
+"""
+    la_plist.write_text(la_xml, encoding="utf-8")
+    try:
+        subprocess.run(["launchctl", "load", "-w", str(la_plist)],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+    print(f"{GREEN}done{RESET}")
+
+    # ── 7. Register with Launch Services so Finder/Spotlight see the app ──────
+    try:
+        subprocess.run(
+            ["/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+             "LaunchServices.framework/Support/lsregister",
+             "-f", str(app_dir)],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+    # ── 8. Launch installed app and exit installer ────────────────────────────
+    print(f"\n{GREEN}  ✔ Installation complete!{RESET}")
+    print(f"{GREEN}  Launching ChainMind Node from {app_dir.name}…{RESET}\n")
+    subprocess.Popen(
+        [str(binary_dst), "--no-setup"],
+        cwd=str(macos_dir),
+        start_new_session=True,
+    )
+    sys.exit(0)
+
+
+def _mac_uninstall() -> None:
+    """Remove the .app bundle and LaunchAgent."""
+    import shutil
+
+    app_dir = _mac_app_dir()
+    la      = _mac_launch_agent_plist()
+
+    try:
+        subprocess.run(["launchctl", "unload", "-w", str(la)],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    if la.exists():
+        la.unlink()
+        print(f"{YELLOW}  Removed LaunchAgent{RESET}")
+
+    if app_dir.exists():
+        shutil.rmtree(str(app_dir), ignore_errors=True)
+        print(f"{GREEN}  ✔ Removed {app_dir}{RESET}")
+
+    print(f"{GREEN}  ChainMind Node has been uninstalled.{RESET}")
+    sys.exit(0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.7  Linux self-installer
+#
+#  On first run (frozen binary NOT in ~/.local/share/chainmind-network/) the
+#  launcher acts as an installer:
+#    1. Runs the setup wizard to collect node name / secrets
+#    2. Copies binary → ~/.local/share/chainmind-network/chainmind-node
+#    3. Creates ~/.local/share/applications/chainmind-network.desktop
+#    4. Creates ~/.config/autostart/chainmind-network.desktop
+#    5. Creates symlink in ~/.local/bin/chainmind-node (if dir on PATH)
+#    6. Launches the installed binary and exits the installer process
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _linux_install_dir() -> Path:
+    """~/.local/share/chainmind-network/"""
+    return Path.home() / ".local" / "share" / "chainmind-network"
+
+
+def _linux_install(cfg: dict) -> None:
+    """
+    Install to ~/.local/share/chainmind-network/, create .desktop entries and
+    autostart, then launch the installed binary and exit.
+    Always ends with sys.exit(0).
+    """
+    import shutil
+
+    install_dir  = _linux_install_dir()
+    binary_dst   = install_dir / "chainmind-node"
+    icon_dst     = install_dir / "icon.png"
+    desktop_dir  = Path.home() / ".local" / "share" / "applications"
+    autostart_dir = Path.home() / ".config" / "autostart"
+    bin_dir      = Path.home() / ".local" / "bin"
+
+    print(f"\n{CYAN}  Installing ChainMind Network to:{RESET}")
+    print(f"  {install_dir}\n")
+
+    # ── 1. Create directories ─────────────────────────────────────────────────
+    install_dir.mkdir(parents=True, exist_ok=True)
+    (install_dir / "data" / "logs").mkdir(parents=True, exist_ok=True)
+    desktop_dir.mkdir(parents=True, exist_ok=True)
+    autostart_dir.mkdir(parents=True, exist_ok=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 2. Copy executable ────────────────────────────────────────────────────
+    print(f"{CYAN}  Copying executable…{RESET}", end=" ", flush=True)
+    shutil.copy2(str(Path(sys.executable).resolve()), str(binary_dst))
+    os.chmod(str(binary_dst), 0o755)
+    print(f"{GREEN}done{RESET}")
+
+    # ── 3. Copy config.yaml + VERSION ────────────────────────────────────────
+    for fname in ("config.yaml", "VERSION"):
+        src = INSTALL_DIR / fname
+        if src.exists():
+            shutil.copy2(str(src), str(install_dir / fname))
+
+    # ── 4. Copy icon ──────────────────────────────────────────────────────────
+    for candidate in [
+        BUNDLE_DIR  / "assets" / "icon.png",
+        INSTALL_DIR / "assets" / "icon.png",
+    ]:
+        if candidate.exists():
+            shutil.copy2(str(candidate), str(icon_dst))
+            break
+
+    # ── 5. .desktop launcher file ─────────────────────────────────────────────
+    print(f"{CYAN}  Creating application entry…{RESET}", end=" ", flush=True)
+    icon_line = f"Icon={icon_dst}" if icon_dst.exists() else "Icon=network-wired"
+    desktop_entry = (
+        "[Desktop Entry]\n"
+        "Version=1.0\n"
+        "Type=Application\n"
+        "Name=ChainMind Node\n"
+        "Comment=Decentralised AI Network Node\n"
+        f"Exec={binary_dst} --no-setup\n"
+        f"{icon_line}\n"
+        "Terminal=false\n"
+        "Categories=Network;Science;\n"
+        "StartupNotify=true\n"
+    )
+    desktop_file = desktop_dir / "chainmind-network.desktop"
+    desktop_file.write_text(desktop_entry, encoding="utf-8")
+    os.chmod(str(desktop_file), 0o755)
+    print(f"{GREEN}done{RESET}")
+
+    # ── 6. Autostart entry ────────────────────────────────────────────────────
+    print(f"{CYAN}  Registering auto-start…{RESET}", end=" ", flush=True)
+    autostart_entry = (
+        "[Desktop Entry]\n"
+        "Version=1.0\n"
+        "Type=Application\n"
+        "Name=ChainMind Node\n"
+        f"Exec={binary_dst} --no-setup --no-browser\n"
+        f"{icon_line}\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+        "Comment=ChainMind Network node — starts at login\n"
+    )
+    autostart_file = autostart_dir / "chainmind-network.desktop"
+    autostart_file.write_text(autostart_entry, encoding="utf-8")
+    os.chmod(str(autostart_file), 0o755)
+    print(f"{GREEN}done{RESET}")
+
+    # ── 7. Symlink in ~/.local/bin ────────────────────────────────────────────
+    link = bin_dir / "chainmind-node"
+    try:
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(binary_dst)
+        print(f"{GREEN}  ✔ Symlink: {link} → {binary_dst}{RESET}")
+    except Exception as e:
+        print(f"{YELLOW}  Symlink skipped: {e}{RESET}")
+
+    # ── 8. Refresh desktop database ──────────────────────────────────────────
+    try:
+        subprocess.run(["update-desktop-database", str(desktop_dir)],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    # ── 9. Launch installed binary and exit installer ─────────────────────────
+    print(f"\n{GREEN}  ✔ Installation complete!{RESET}")
+    print(f"{GREEN}  Launching ChainMind Node from {install_dir}…{RESET}\n")
+    subprocess.Popen(
+        [str(binary_dst), "--no-setup"],
+        cwd=str(install_dir),
+        start_new_session=True,
+    )
+    sys.exit(0)
+
+
+def _linux_uninstall() -> None:
+    """Remove install dir, .desktop entries, symlink."""
+    import shutil
+
+    install_dir   = _linux_install_dir()
+    desktop_file  = Path.home() / ".local" / "share" / "applications" / "chainmind-network.desktop"
+    autostart_file = Path.home() / ".config" / "autostart" / "chainmind-network.desktop"
+    link          = Path.home() / ".local" / "bin" / "chainmind-node"
+
+    for p in (desktop_file, autostart_file):
+        if p.exists():
+            p.unlink()
+
+    if link.is_symlink():
+        link.unlink()
+
+    try:
+        subprocess.run(["update-desktop-database",
+                        str(Path.home() / ".local" / "share" / "applications")],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    if install_dir.exists():
+        shutil.rmtree(str(install_dir), ignore_errors=True)
+        print(f"{GREEN}  ✔ Removed {install_dir}{RESET}")
 
     print(f"{GREEN}  ChainMind Node has been uninstalled.{RESET}")
     sys.exit(0)
@@ -869,28 +1230,39 @@ def main():
     parser.add_argument("--uninstall",    action="store_true", help="Uninstall ChainMind Node")
     args = parser.parse_args()
 
-    # ── Uninstall ──────────────────────────────────────────────────────────────
-    if args.uninstall and sys.platform == "win32":
+    # ── Uninstall (all platforms) ──────────────────────────────────────────────
+    if args.uninstall:
         banner()
-        _win_uninstall()   # exits
+        if sys.platform == "win32":
+            _win_uninstall()       # exits
+        elif sys.platform == "darwin":
+            _mac_uninstall()       # exits
+        else:
+            _linux_uninstall()     # exits
 
     banner()
 
-    # ── Windows self-install (first run from downloaded exe) ──────────────────
-    # Only triggers when: frozen exe + Windows + not already in install dir
-    # + no --no-setup flag (shortcuts always pass --no-setup)
-    if (sys.platform == "win32"
-            and getattr(sys, "frozen", False)
-            and not args.no_setup
-            and not args.setup
-            and not _is_running_from_install_dir()):
+    # ── Self-install on first run (frozen binary not yet in install location) ──
+    # Triggers when: frozen exe + not already in install dir + no --no-setup
+    _needs_install = (
+        getattr(sys, "frozen", False)
+        and not args.no_setup
+        and not args.setup
+        and not _is_running_from_install_dir()
+    )
+    if _needs_install:
         # Run wizard so the user can name their node before we install
         os.chdir(str(INSTALL_DIR))
         if str(INSTALL_DIR) not in sys.path:
             sys.path.insert(0, str(INSTALL_DIR))
         from node.setup_wizard import maybe_run_wizard
         cfg = maybe_run_wizard()
-        _win_install(cfg)   # copies exe, creates shortcuts, launches installed copy, exits
+        if sys.platform == "win32":
+            _win_install(cfg)      # copies exe, creates shortcuts, exits
+        elif sys.platform == "darwin":
+            _mac_install(cfg)      # creates .app bundle, LaunchAgent, exits
+        else:
+            _linux_install(cfg)    # copies to ~/.local/share/, .desktop, exits
 
     # ── Normal startup (running from install dir or non-Windows) ──────────────
     os.chdir(str(INSTALL_DIR))

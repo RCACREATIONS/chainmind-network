@@ -154,3 +154,28 @@ exe = EXE(
     entitlements_file=None,
     icon=_icon() or (str(Path('assets/icon.ico')) if Path('assets/icon.ico').exists() else None),
 )
+
+# ── macOS .app bundle ─────────────────────────────────────────────────────────
+# Only active when building on macOS; on Windows/Linux this block is a no-op.
+if sys.platform == "darwin":
+    app = BUNDLE(
+        exe,
+        name="ChainMind Network.app",
+        icon=_icon(),
+        bundle_identifier="com.chainmind.network",
+        info_plist={
+            "CFBundleName":             "ChainMind Node",
+            "CFBundleDisplayName":      "ChainMind Network",
+            "CFBundleVersion":          "1.2.4",
+            "CFBundleShortVersionString": "1.2.4",
+            "CFBundleExecutable":       "ChainMind-Node",
+            "CFBundleIdentifier":       "com.chainmind.network",
+            "CFBundlePackageType":      "APPL",
+            # LSUIElement=True → menu-bar-only app (no Dock icon by default)
+            # Set to False if you want a Dock icon.
+            "LSUIElement":              True,
+            "NSHighResolutionCapable":  True,
+            # Allow Hardened Runtime / notarisation later
+            "com.apple.security.cs.allow-unsigned-executable-memory": True,
+        },
+    )
