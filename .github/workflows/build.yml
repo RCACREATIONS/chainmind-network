@@ -141,69 +141,6 @@ jobs:
           name: macos-arm64
           path: dist/ChainMind-Node-macos-arm64.zip
 
-  # ── macOS x64 (Intel — pre-late-2020 Macs) ───────────────────────────────────
-  build-macos-x64:
-    name: macOS x64 (Intel)
-    runs-on: macos-13              # last Intel GitHub-hosted runner
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install pyinstaller -r requirements.txt
-
-      - name: Resolve version & write VERSION
-        id: ver
-        run: |
-          VER="${{ github.ref_name }}"
-          VER="${VER#v}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VER="${{ github.event.inputs.version }}"
-          fi
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" != "tag" ]; then
-            VER="dev-$(echo '${{ github.sha }}' | cut -c1-8)"
-          fi
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          printf '%s' "$VER" > VERSION
-
-      - name: Generate icon.icns from icon.png
-        run: |
-          if [ -f assets/icon.png ]; then
-            mkdir -p icon.iconset
-            sips -z 16   16   assets/icon.png --out icon.iconset/icon_16x16.png      >/dev/null
-            sips -z 32   32   assets/icon.png --out icon.iconset/icon_16x16@2x.png   >/dev/null
-            sips -z 32   32   assets/icon.png --out icon.iconset/icon_32x32.png      >/dev/null
-            sips -z 64   64   assets/icon.png --out icon.iconset/icon_32x32@2x.png   >/dev/null
-            sips -z 128  128  assets/icon.png --out icon.iconset/icon_128x128.png    >/dev/null
-            sips -z 256  256  assets/icon.png --out icon.iconset/icon_128x128@2x.png >/dev/null
-            sips -z 256  256  assets/icon.png --out icon.iconset/icon_256x256.png    >/dev/null
-            sips -z 512  512  assets/icon.png --out icon.iconset/icon_256x256@2x.png >/dev/null
-            sips -z 512  512  assets/icon.png --out icon.iconset/icon_512x512.png    >/dev/null
-            sips -z 1024 1024 assets/icon.png --out icon.iconset/icon_512x512@2x.png >/dev/null
-            iconutil -c icns icon.iconset -o assets/icon.icns
-            rm -rf icon.iconset
-            echo "icon.icns generated"
-          else
-            echo "No icon.png found — skipping icon.icns generation"
-          fi
-
-      - name: Build .app bundle
-        run: pyinstaller chainmind.spec --clean --noconfirm
-
-      - name: Zip .app bundle
-        run: |
-          cd dist
-          zip -r "ChainMind-Node-macos-x64.zip" "ChainMind Network.app"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-x64
-          path: dist/ChainMind-Node-macos-x64.zip
-
   # ── Linux x64 ───────────────────────────────────────────────────────────────
   build-linux:
     name: Linux x64
@@ -253,7 +190,7 @@ jobs:
   release:
     name: Publish GitHub Release
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
-    needs: [build-windows, build-macos-arm64, build-macos-x64, build-linux]
+    needs: [build-windows, build-macos-arm64, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -281,14 +218,12 @@ jobs:
       - name: Compute SHA-256 checksums
         id: checksums
         run: |
-          WIN=$(sha256sum     dist/windows-x64/ChainMind-Node-windows-x64.exe   | awk '{print $1}')
-          MAC_ARM=$(sha256sum dist/macos-arm64/ChainMind-Node-macos-arm64.zip   | awk '{print $1}')
-          MAC_X64=$(sha256sum dist/macos-x64/ChainMind-Node-macos-x64.zip       | awk '{print $1}')
-          LNX=$(sha256sum     dist/linux-x64/ChainMind-Node-linux-x64           | awk '{print $1}')
-          echo "win=$WIN"         >> "$GITHUB_OUTPUT"
-          echo "mac_arm=$MAC_ARM" >> "$GITHUB_OUTPUT"
-          echo "mac_x64=$MAC_X64" >> "$GITHUB_OUTPUT"
-          echo "lnx=$LNX"        >> "$GITHUB_OUTPUT"
+          WIN=$(sha256sum     dist/windows-x64/ChainMind-Node-windows-x64.exe | awk '{print $1}')
+          MAC=$(sha256sum     dist/macos-arm64/ChainMind-Node-macos-arm64.zip  | awk '{print $1}')
+          LNX=$(sha256sum     dist/linux-x64/ChainMind-Node-linux-x64          | awk '{print $1}')
+          echo "win=$WIN" >> "$GITHUB_OUTPUT"
+          echo "mac=$MAC" >> "$GITHUB_OUTPUT"
+          echo "lnx=$LNX" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -299,7 +234,6 @@ jobs:
           files: |
             dist/windows-x64/ChainMind-Node-windows-x64.exe
             dist/macos-arm64/ChainMind-Node-macos-arm64.zip
-            dist/macos-x64/ChainMind-Node-macos-x64.zip
             dist/linux-x64/ChainMind-Node-linux-x64
 
       - name: Update release/latest.json and push
@@ -307,8 +241,6 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Reset to latest origin/main so we never conflict with commits
-          # that landed while the build was running
           git fetch origin main
           git reset --hard origin/main
 
@@ -324,14 +256,12 @@ jobs:
             "assets": {
               "windows_x64":  "${BASE}/ChainMind-Node-windows-x64.exe",
               "macos_arm64":  "${BASE}/ChainMind-Node-macos-arm64.zip",
-              "macos_x64":    "${BASE}/ChainMind-Node-macos-x64.zip",
               "linux_x64":    "${BASE}/ChainMind-Node-linux-x64",
               "source":       "https://github.com/${REPO}/archive/refs/tags/v${VER}.zip"
             },
             "checksums": {
               "windows_x64":  "${{ steps.checksums.outputs.win }}",
-              "macos_arm64":  "${{ steps.checksums.outputs.mac_arm }}",
-              "macos_x64":    "${{ steps.checksums.outputs.mac_x64 }}",
+              "macos_arm64":  "${{ steps.checksums.outputs.mac }}",
               "linux_x64":    "${{ steps.checksums.outputs.lnx }}",
               "source":       ""
             }
