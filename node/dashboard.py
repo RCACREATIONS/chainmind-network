@@ -393,6 +393,27 @@ def _update_notification_banner():
 # ════════════════════════════════════════════════════════
 _update_notification_banner()
 
+# ── Invalid node secret banner (shown on every page) ─────────────────────────
+def _invalid_secret_banner():
+    """Show a prominent error if the node secret was rejected by the central server."""
+    try:
+        _s = fetch("/stats") or {}
+        if _s.get("central_secret_invalid"):
+            st.markdown(
+                "<div style='background:#fff1f2;border:1.5px solid #ef4444;border-radius:10px;"
+                "padding:10px 18px;margin-bottom:12px;display:flex;align-items:center;gap:10px'>"
+                "<span style='font-size:18px'>🔑</span>"
+                "<span style='color:#991b1b;font-size:13px'>"
+                "<b>Invalid node secret</b> — the central server rejected your credentials (403). "
+                "Go to <b>⚙️ Settings → Reconnect Account</b> to log in again and get a fresh secret."
+                "</span></div>",
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        pass
+
+_invalid_secret_banner()
+
 if page == "🏠 Overview":
     st.title("Overview")
 
@@ -1461,12 +1482,70 @@ elif page == "⚙️ Settings":
                     )
                     st.balloons()
                     st.cache_data.clear()
+                    st.session_state["_settings_show_pair"] = True
                 else:
                     st.error(f"❌ {_rc_result.get('error', 'Connection failed — check your credentials.')}")
             elif _rc_submit:
                 st.warning("Please enter your email and password.")
 
     st.caption("Edit `config.yaml` in the node folder to change these settings.")
+
+    st.divider()
+
+    # ── Pairing Token ───────────────────────────────────────────────────────────
+    _settings_central_url = central_cfg.get("url", "https://chainmind.com.ng").rstrip("/")
+    _settings_linked_email = ""
+    _settings_earnings = fetch("/account/earnings") or {}
+    _settings_earnings_data = _settings_earnings.get("earnings") or {}
+    if _settings_earnings_data:
+        _settings_linked_email = _settings_earnings_data.get("linked_email", "")
+
+    st.subheader("🔗 Link Web Account")
+
+    if _settings_linked_email:
+        _settings_linked_at = (_settings_earnings_data.get("linked_at") or "")[:10]
+        st.success(
+            f"✅ Linked to **{_settings_linked_email}**"
+            + (f" since {_settings_linked_at}" if _settings_linked_at else "")
+        )
+        st.markdown(
+            f"[Open Web Dashboard ↗]({_settings_central_url}/dashboard/node-earnings.php) — "
+            "view full earnings history, manage withdrawals, and top up credits."
+        )
+    else:
+        _pair_expanded = st.session_state.get("_settings_show_pair", not central_enabled)
+        st.markdown(
+            "After connecting your account above, generate a one-time pairing token on the "
+            f"[ChainMind web dashboard]({_settings_central_url}/dashboard/node-settings.php) "
+            "and paste it below to link this node to your account."
+        )
+        with st.expander("Paste Pairing Token", expanded=_pair_expanded):
+            st.markdown(
+                f"**Steps:**\n"
+                f"1. Open [{_settings_central_url}/dashboard/node-settings.php]"
+                f"({_settings_central_url}/dashboard/node-settings.php)\n"
+                "2. Click **Generate Token** — it is valid for 10 minutes\n"
+                "3. Copy the token and paste it below, then click **Link Account**"
+            )
+            with st.form("settings_pair_form"):
+                _pair_token = st.text_input("Pairing Token", placeholder="Paste your one-time pairing token here…")
+                _pair_submit = st.form_submit_button("🔗 Link Account", type="primary")
+                if _pair_submit and _pair_token.strip():
+                    with st.spinner("Linking account…"):
+                        _pair_result = post("/account/link", {"token": _pair_token.strip()})
+                    if _pair_result.get("ok"):
+                        st.success(
+                            f"✅ Linked to **{_pair_result.get('user_email', 'your account')}**! "
+                            "Stats will update within 30 seconds."
+                        )
+                        st.balloons()
+                        st.session_state.pop("_settings_show_pair", None)
+                        st.cache_data.clear()
+                    else:
+                        _pair_err = _pair_result.get("error", "Link failed — check the token and try again.")
+                        st.error(f"❌ {_pair_err}")
+                elif _pair_submit:
+                    st.warning("Please paste a pairing token first.")
     st.divider()
     st.subheader("IQ Token Economy")
     _tokens_cfg = CFG.get("tokens", {})
