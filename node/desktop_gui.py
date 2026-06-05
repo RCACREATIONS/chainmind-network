@@ -344,12 +344,121 @@ class ChainMindGUI:
         # The launcher's monitor thread will respawn it
 
     def _check_updates(self):
-        import subprocess
-        threading.Thread(
-            target=lambda: subprocess.run(
-                [sys.executable, "--update"], check=False),
-            daemon=True,
-        ).start()
+        """Open a progress dialog and run the updater in a background thread."""
+        self._open_update_dialog()
+
+    def _open_update_dialog(self):
+        dlg = Toplevel(self._root)
+        dlg.title("Check for Updates")
+        dlg.configure(bg=C_BG)
+        dlg.resizable(False, False)
+        dlg.geometry("480x310")
+        dlg.transient(self._root)
+        dlg.grab_set()
+
+        # ── Title ─────────────────────────────────────────────────────────────
+        Label(dlg, text="⬆  Software Update",
+              font=("Segoe UI", 14, "bold"),
+              fg=C_TEXT, bg=C_BG, pady=16).pack(fill="x", padx=20)
+
+        # ── Status label ──────────────────────────────────────────────────────
+        status_var = StringVar(value="Starting…")
+        Label(dlg, textvariable=status_var,
+              font=("Segoe UI", 10),
+              fg=C_ACCENT_LT, bg=C_BG,
+              wraplength=440, justify="left").pack(fill="x", padx=20)
+
+        # ── Progress bar ──────────────────────────────────────────────────────
+        pbar_frame = Frame(dlg, bg=C_BG, padx=20, pady=10)
+        pbar_frame.pack(fill="x")
+        pbar = ttk.Progressbar(pbar_frame, mode="indeterminate", length=440)
+        pbar.pack(fill="x")
+        pbar.start(12)
+
+        # ── Detail / result text box ──────────────────────────────────────────
+        detail_frame = Frame(dlg, bg=C_BG, padx=20, pady=4)
+        detail_frame.pack(fill="both", expand=True)
+        detail_text = Text(
+            detail_frame,
+            bg="#110d23", fg="#c4b5fd",
+            font=("Consolas", 8),
+            wrap="word", relief="flat", bd=0,
+            height=5, state="disabled",
+        )
+        detail_text.pack(fill="both", expand=True)
+
+        # ── Close button (disabled until done) ────────────────────────────────
+        close_btn = tk.Button(
+            dlg, text="Please wait…",
+            bg=C_PANEL, fg=C_MUTED,
+            font=("Segoe UI", 10, "bold"),
+            bd=0, padx=14, pady=8,
+            state="disabled",
+        )
+        close_btn.pack(pady=(8, 14))
+
+        def _append_detail(msg: str):
+            detail_text.configure(state="normal")
+            detail_text.insert("end", msg + "\n")
+            detail_text.see("end")
+            detail_text.configure(state="disabled")
+
+        def _finish(result_msg: str, is_error: bool = False):
+            pbar.stop()
+            pbar.configure(mode="determinate", value=100)
+            status_var.set(result_msg)
+            close_btn.configure(
+                text="Close",
+                state="normal",
+                bg=C_ACCENT if not is_error else "#3b1d1d",
+                fg=C_TEXT if not is_error else "#fca5a5",
+                activebackground=C_ACCENT2 if not is_error else "#5f2020",
+                cursor="hand2",
+                command=dlg.destroy,
+            )
+
+        # ── Thread callbacks (must marshal back to Tk thread via after) ───────
+        def _on_status(msg: str):
+            dlg.after(0, lambda m=msg: (status_var.set(m), _append_detail(m)))
+
+        def _on_progress(done: int, total: int):
+            if total and total > 0:
+                pct = min(done * 100 // total, 100)
+                mb_done  = done  / 1_048_576
+                mb_total = total / 1_048_576
+                label = f"Downloading… {mb_done:.1f} / {mb_total:.1f} MB  ({pct}%)"
+
+                def _update_bar(p=pct, lbl=label):
+                    pbar.stop()
+                    pbar.configure(mode="determinate", value=p)
+                    status_var.set(lbl)
+
+                dlg.after(0, _update_bar)
+
+        def _run_update():
+            try:
+                from node import updater
+                r = updater.check_and_apply(
+                    progress_cb=_on_progress,
+                    status_cb=_on_status,
+                    silent_if_current=False,
+                )
+                if r.error:
+                    dlg.after(0, lambda: _finish(f"Error: {r.error}", is_error=True))
+                elif not r.available:
+                    dlg.after(0, lambda: _finish("You are already on the latest version."))
+                elif r.applied:
+                    dlg.after(0, lambda: _finish(
+                        f"✓ Updated to v{r.new_version}! Please restart ChainMind."))
+                elif r.staged:
+                    dlg.after(0, lambda: _finish(
+                        f"✓ Update ready (v{r.new_version}). It will apply on next restart."))
+                else:
+                    dlg.after(0, lambda: _finish("Update complete."))
+            except Exception as e:
+                dlg.after(0, lambda: _finish(f"Unexpected error: {e}", is_error=True))
+
+        threading.Thread(target=_run_update, daemon=True).start()
 
     def _quit(self):
         self._stop_all()

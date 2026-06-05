@@ -1374,4 +1374,77 @@ elif page == "⚙️ Settings":
         unsafe_allow_html=True,
     )
     st.divider()
+
+    # ── Software Update ────────────────────────────────────────────────────────
+    st.subheader("Software Update")
+
+    from pathlib import Path as _Path
+    import sys as _sys
+
+    _ver_file = _Path(__file__).parent.parent / "VERSION"
+    _cur_ver  = _ver_file.read_text().strip() if _ver_file.exists() else "unknown"
+
+    col_ver, col_btn = st.columns([3, 1])
+    with col_ver:
+        st.markdown(
+            f"<div class='cm-card' style='padding:12px 16px'>"
+            f"<span style='color:#6d28d9;font-weight:600;font-size:13px'>Installed Version</span>"
+            f"<br/><span style='font-size:20px;font-weight:700'>v{_cur_ver}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    with col_btn:
+        _do_check = st.button("🔍 Check for Updates", use_container_width=True)
+
+    if _do_check:
+        _status_box   = st.empty()
+        _progress_box = st.empty()
+        _result_box   = st.empty()
+
+        _status_msgs: list[str] = []
+
+        def _st_status(msg: str):
+            _status_msgs.append(msg)
+            _status_box.info("  \n".join(_status_msgs))
+
+        def _st_progress(done: int, total: int):
+            if total and total > 0:
+                pct = min(done / total, 1.0)
+                mb_done  = done  / 1_048_576
+                mb_total = total / 1_048_576
+                _progress_box.progress(pct, text=f"Downloading… {mb_done:.1f} / {mb_total:.1f} MB")
+
+        with st.spinner("Contacting update server…"):
+            try:
+                from node import updater as _updater
+                _r = _updater.check_and_apply(
+                    progress_cb=_st_progress,
+                    status_cb=_st_status,
+                    silent_if_current=False,
+                )
+            except Exception as _e:
+                _r = None
+                _result_box.error(f"Update check failed: {_e}")
+
+        _progress_box.empty()
+
+        if _r is not None:
+            if _r.error:
+                _result_box.error(f"⚠️ {_r.error}")
+            elif not _r.available:
+                _result_box.success(f"✅ You are already on the latest version (v{_cur_ver}).")
+            elif _r.applied:
+                _result_box.success(
+                    f"✅ Updated to **v{_r.new_version}**! "
+                    "Please restart ChainMind to use the new version."
+                )
+                if _r.changelog:
+                    st.markdown(f"**What's new:** {_r.changelog}")
+            elif _r.staged:
+                _result_box.warning(
+                    f"⬆️ Update to **v{_r.new_version}** staged. "
+                    "It will apply automatically on next restart."
+                )
+
+    st.divider()
     st.caption("ChainMind Network — Modern AI inference, peer-to-peer.")
