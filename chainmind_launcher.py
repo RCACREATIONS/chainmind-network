@@ -402,6 +402,202 @@ def _create_desktop_shortcut() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 6.5  Windows self-installer
+#
+#  On first run (frozen exe NOT in the proper install directory) the launcher
+#  acts as an installer:
+#    1. Runs the setup wizard to collect node name / secrets
+#    2. Copies itself to  %LOCALAPPDATA%\Programs\ChainMind Network\
+#    3. Copies config.yaml + VERSION into the install dir
+#    4. Creates a Desktop shortcut   → installed exe  --no-setup
+#    5. Creates Start Menu entries   → installed exe  --no-setup
+#    6. Registers the startup key    → installed exe  --no-setup --no-browser
+#    7. Launches the installed exe and exits this (installer) process
+#
+#  All shortcuts/startup use --no-setup so the wizard never fires again.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _win_install_dir() -> Path:
+    """Per-user install location — no administrator rights required."""
+    local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+    return Path(local) / "Programs" / "ChainMind Network"
+
+
+def _is_running_from_install_dir() -> bool:
+    """True when the frozen exe is already living in the install location."""
+    if not getattr(sys, "frozen", False):
+        return True   # plain Python / dev mode — skip installer entirely
+    try:
+        return Path(sys.executable).resolve().parent.resolve() == _win_install_dir().resolve()
+    except Exception:
+        return True   # if in doubt, skip installer
+
+
+def _make_lnk(lnk_path: str, target: str, workdir: str,
+              args: str, icon: str) -> None:
+    """Create a Windows .lnk shortcut via PowerShell EncodedCommand (handles spaces/apostrophes)."""
+    import base64
+    ps_lines = [
+        "$ws = New-Object -ComObject WScript.Shell",
+        f'$sc = $ws.CreateShortcut("{lnk_path}")',
+        f'$sc.TargetPath = "{target}"',
+        f'$sc.Arguments = "{args}"',
+        f'$sc.WorkingDirectory = "{workdir}"',
+        '$sc.Description = "ChainMind Network — Decentralised AI Node"',
+        f'$sc.IconLocation = "{icon},0"',
+        "$sc.Save()",
+    ]
+    ps      = "; ".join(ps_lines)
+    encoded = base64.b64encode(ps.encode("utf-16-le")).decode("ascii")
+    subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive",
+         "-EncodedCommand", encoded],
+        capture_output=True, timeout=15,
+    )
+
+
+def _win_install(cfg: dict) -> None:
+    """
+    Install to %LOCALAPPDATA%\\Programs\\ChainMind Network\\,
+    create all shortcuts, register startup, then launch installed copy and exit.
+    This function ALWAYS ends with sys.exit(0).
+    """
+    import shutil, base64
+
+    install_dir = _win_install_dir()
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+    exe_src = Path(sys.executable).resolve()
+    exe_dst = install_dir / "ChainMind Node.exe"
+
+    print(f"\n{CYAN}  Installing ChainMind Network to:{RESET}")
+    print(f"  {install_dir}\n")
+
+    # ── 1. Copy the executable ────────────────────────────────────────────────
+    print(f"{CYAN}  Copying executable…{RESET}", end=" ", flush=True)
+    shutil.copy2(str(exe_src), str(exe_dst))
+    print(f"{GREEN}done{RESET}")
+
+    # ── 2. Copy config.yaml + VERSION ─────────────────────────────────────────
+    for fname in ("config.yaml", "VERSION"):
+        src = INSTALL_DIR / fname
+        if src.exists():
+            shutil.copy2(str(src), str(install_dir / fname))
+
+    # ── 3. Ensure data/logs directory ─────────────────────────────────────────
+    (install_dir / "data" / "logs").mkdir(parents=True, exist_ok=True)
+
+    # ── 4. Resolve icon path ──────────────────────────────────────────────────
+    ico = str(exe_dst)   # fallback: Windows extracts icon from .exe
+    for candidate in [
+        BUNDLE_DIR  / "assets" / "icon.ico",
+        INSTALL_DIR / "assets" / "icon.ico",
+    ]:
+        if candidate.exists():
+            ico = str(candidate.resolve())
+            break
+
+    exe_str     = str(exe_dst)
+    install_str = str(install_dir)
+
+    # ── 5. Desktop shortcut ───────────────────────────────────────────────────
+    print(f"{CYAN}  Creating Desktop shortcut…{RESET}", end=" ", flush=True)
+    desktop  = os.path.join(os.path.expanduser("~"), "Desktop")
+    lnk_desk = os.path.join(desktop, "ChainMind Node.lnk")
+    _make_lnk(lnk_desk, exe_str, install_str, "--no-setup", ico)
+    print(f"{GREEN}done{RESET}")
+
+    # ── 6. Start Menu ─────────────────────────────────────────────────────────
+    print(f"{CYAN}  Creating Start Menu entries…{RESET}", end=" ", flush=True)
+    appdata   = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+    sm_folder = os.path.join(appdata, "Microsoft", "Windows",
+                             "Start Menu", "Programs", "ChainMind Network")
+    os.makedirs(sm_folder, exist_ok=True)
+    _make_lnk(os.path.join(sm_folder, "ChainMind Node.lnk"),
+              exe_str, install_str, "--no-setup", ico)
+    _make_lnk(os.path.join(sm_folder, "Uninstall ChainMind.lnk"),
+              exe_str, install_str, "--uninstall", ico)
+    print(f"{GREEN}done{RESET}")
+
+    # ── 7. Auto-start on Windows login ───────────────────────────────────────
+    print(f"{CYAN}  Registering auto-start…{RESET}", end=" ", flush=True)
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE,
+        )
+        winreg.SetValueEx(key, "ChainMind Network", 0, winreg.REG_SZ,
+                          f'"{exe_str}" --no-setup --no-browser')
+        winreg.CloseKey(key)
+        print(f"{GREEN}done{RESET}")
+    except Exception as e:
+        print(f"{YELLOW}skipped ({e}){RESET}")
+
+    # ── 8. Launch installed exe and exit installer ────────────────────────────
+    print(f"\n{GREEN}  ✔ Installation complete!{RESET}")
+    print(f"{GREEN}  Launching ChainMind Node from installation directory…{RESET}\n")
+    subprocess.Popen(
+        [str(exe_dst), "--no-setup"],
+        cwd=str(install_dir),
+        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+    )
+    sys.exit(0)
+
+
+def _win_uninstall() -> None:
+    """Remove install dir, shortcuts, and startup registry entry."""
+    import shutil
+
+    install_dir = _win_install_dir()
+
+    # Remove startup entry
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE,
+        )
+        winreg.DeleteValue(key, "ChainMind Network")
+        winreg.CloseKey(key)
+    except Exception:
+        pass
+
+    # Remove Desktop shortcut
+    lnk = os.path.join(os.path.expanduser("~"), "Desktop", "ChainMind Node.lnk")
+    if os.path.exists(lnk):
+        os.unlink(lnk)
+
+    # Remove Start Menu folder
+    appdata   = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+    sm_folder = os.path.join(appdata, "Microsoft", "Windows",
+                             "Start Menu", "Programs", "ChainMind Network")
+    if os.path.exists(sm_folder):
+        shutil.rmtree(sm_folder, ignore_errors=True)
+
+    print(f"{GREEN}  ✔ ChainMind shortcuts and startup entry removed.{RESET}")
+    print(f"{YELLOW}  To fully remove, delete: {install_dir}{RESET}")
+
+    # Schedule self-deletion of install dir (happens after this process exits)
+    if install_dir.exists():
+        bat = Path(os.environ.get("TEMP", str(Path.home()))) / "_chainmind_uninstall.bat"
+        bat.write_text(
+            "@echo off\n"
+            "timeout /t 2 /nobreak >nul\n"
+            f'rmdir /s /q "{install_dir}"\n'
+            "del \"%~f0\"\n",
+            encoding="utf-8",
+        )
+        subprocess.Popen(["cmd", "/c", str(bat)],
+                         creationflags=subprocess.DETACHED_PROCESS)
+
+    print(f"{GREEN}  ChainMind Node has been uninstalled.{RESET}")
+    sys.exit(0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 7.  Windows startup registration
 # ─────────────────────────────────────────────────────────────────────────────
 _STARTUP_KEY   = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -667,13 +863,36 @@ def main():
     parser.add_argument("--no-browser",   action="store_true", help="Don't open browser")
     parser.add_argument("--no-tray",      action="store_true", help="Disable system tray")
     parser.add_argument("--no-gui",       action="store_true", help="Disable desktop GUI window")
-    parser.add_argument("--no-setup",      action="store_true",
-                        help="Skip setup wizard even if config looks default")
+    parser.add_argument("--no-setup",     action="store_true",
+                        help="Skip setup wizard (used by shortcuts launched from install dir)")
     parser.add_argument("--setup",        action="store_true", help="Re-run setup wizard")
+    parser.add_argument("--uninstall",    action="store_true", help="Uninstall ChainMind Node")
     args = parser.parse_args()
+
+    # ── Uninstall ──────────────────────────────────────────────────────────────
+    if args.uninstall and sys.platform == "win32":
+        banner()
+        _win_uninstall()   # exits
 
     banner()
 
+    # ── Windows self-install (first run from downloaded exe) ──────────────────
+    # Only triggers when: frozen exe + Windows + not already in install dir
+    # + no --no-setup flag (shortcuts always pass --no-setup)
+    if (sys.platform == "win32"
+            and getattr(sys, "frozen", False)
+            and not args.no_setup
+            and not args.setup
+            and not _is_running_from_install_dir()):
+        # Run wizard so the user can name their node before we install
+        os.chdir(str(INSTALL_DIR))
+        if str(INSTALL_DIR) not in sys.path:
+            sys.path.insert(0, str(INSTALL_DIR))
+        from node.setup_wizard import maybe_run_wizard
+        cfg = maybe_run_wizard()
+        _win_install(cfg)   # copies exe, creates shortcuts, launches installed copy, exits
+
+    # ── Normal startup (running from install dir or non-Windows) ──────────────
     os.chdir(str(INSTALL_DIR))
     if str(INSTALL_DIR) not in sys.path:
         sys.path.insert(0, str(INSTALL_DIR))
@@ -710,12 +929,13 @@ def main():
             with open(install_cfg) as _f:
                 cfg = _yaml.safe_load(_f) or cfg
 
-    # ── One-time setup tasks ───────────────────────────────────────────────────
-    _create_desktop_shortcut()
-
-    # Register for Windows startup on first run (only if not already registered)
-    if sys.platform == "win32" and not _is_registered_for_startup():
-        _register_windows_startup()
+    # ── One-time setup tasks (only when running from the install dir) ──────────
+    # The installer already created shortcuts on Windows; these are no-ops if
+    # shortcuts/registry entries already exist.
+    if not sys.platform == "win32" or _is_running_from_install_dir():
+        _create_desktop_shortcut()
+        if sys.platform == "win32" and not _is_registered_for_startup():
+            _register_windows_startup()
 
     # ── Background update check ────────────────────────────────────────────────
     threading.Thread(

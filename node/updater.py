@@ -70,8 +70,12 @@ _SOURCE_PATCH_SKIP = {
 
 def current_version() -> str:
     if VERSION_FILE.exists():
-        v = VERSION_FILE.read_text().strip()
-        return v if v else "0.0.0"
+        try:
+            raw = VERSION_FILE.read_bytes()
+            v = raw.decode("utf-8", errors="ignore").replace("\x00", "").strip()
+            return v if v else "0.0.0"
+        except Exception:
+            return "0.0.0"
     return "0.0.0"
 
 

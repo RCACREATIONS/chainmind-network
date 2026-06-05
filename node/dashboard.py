@@ -319,7 +319,66 @@ def offline_banner():
         unsafe_allow_html=True,
     )
 
+
+def _update_notification_banner():
+    """Show a banner at the top of every page if a newer version is available.
+    Uses session_state to cache the result so only one network call is made
+    per browser session (not on every Streamlit rerun).
+    """
+    import threading as _threading
+    from pathlib import Path as _P
+
+    # Read current version (null-byte safe)
+    _vf = _P(__file__).parent.parent / "VERSION"
+    try:
+        _cv = _vf.read_bytes().decode("utf-8", errors="ignore").replace("\x00", "").strip() or "0.0.0"
+    except Exception:
+        _cv = "0.0.0"
+
+    # Only check once per session
+    if "update_check_done" not in st.session_state:
+        st.session_state["update_check_done"]    = False
+        st.session_state["update_available"]     = False
+        st.session_state["update_new_version"]   = ""
+        st.session_state["update_changelog"]     = ""
+
+        def _bg_check():
+            try:
+                from node.updater import fetch_latest, version_gt
+                info = fetch_latest()
+                if info and version_gt(info.version, _cv):
+                    st.session_state["update_available"]   = True
+                    st.session_state["update_new_version"] = info.version
+                    st.session_state["update_changelog"]   = info.changelog
+            except Exception:
+                pass
+            finally:
+                st.session_state["update_check_done"] = True
+
+        _threading.Thread(target=_bg_check, daemon=True).start()
+
+    if st.session_state.get("update_available"):
+        _new = st.session_state.get("update_new_version", "")
+        _log = st.session_state.get("update_changelog", "")
+        _log_html = (
+            f" &nbsp;<a href='{_log}' target='_blank' style='color:#6d28d9'>What's new</a>"
+            if _log and _log.startswith("http") else ""
+        )
+        st.markdown(
+            f"<div style='background:#f3e8ff;border:1.5px solid #7c3aed;border-radius:10px;"
+            f"padding:10px 18px;margin-bottom:12px;display:flex;align-items:center;gap:10px'>"
+            f"<span style='font-size:18px'>⬆️</span>"
+            f"<span style='color:#4c1d95;font-size:13px'>"
+            f"<b>Update available: v{_new}</b>{_log_html} &nbsp;—&nbsp; "
+            f"Go to <b>⚙️ Settings → Software Update</b> to install."
+            f"</span></div>",
+            unsafe_allow_html=True,
+        )
+
+
 # ════════════════════════════════════════════════════════
+_update_notification_banner()
+
 if page == "🏠 Overview":
     st.title("Overview")
 
@@ -1382,7 +1441,13 @@ elif page == "⚙️ Settings":
     import sys as _sys
 
     _ver_file = _Path(__file__).parent.parent / "VERSION"
-    _cur_ver  = _ver_file.read_text().strip() if _ver_file.exists() else "unknown"
+    if _ver_file.exists():
+        try:
+            _cur_ver = _ver_file.read_bytes().decode("utf-8", errors="ignore").replace("\x00", "").strip() or "unknown"
+        except Exception:
+            _cur_ver = "unknown"
+    else:
+        _cur_ver = "unknown"
 
     col_ver, col_btn = st.columns([3, 1])
     with col_ver:
