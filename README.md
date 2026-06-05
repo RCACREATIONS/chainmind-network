@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://chainmind.com.ng">
-    <img src="assets/logo.png" alt="ChainMind" width="120" />
+    <img src="[assets/logo.png](https://chainmind.com.ng/ChatGPT%20Image%20Jun%202,%202026,%2006_43_57%20AM.png)" alt="ChainMind" width="120" />
   </a>
 </p>
 
