@@ -8,9 +8,9 @@
     "source":       "https://github.com/RCACREATIONS/chainmind-network/archive/refs/tags/v1.2.9.zip"
   },
   "checksums": {
-    "windows_x64":  "",
-    "macos_arm64":  "",
-    "linux_x64":    "",
+    "windows_x64":  "00173457ef7789fccc0b106227d7f557b2c0eac9b669bac7c8c6603e3fb1d3ad",
+    "macos_arm64":  "29938d358c2751bdaa23f762578446da4f5d79f3feaf0ab669b9fdebff446b81",
+    "linux_x64":    "f37c6227dba24b7a7713e14fa983a98c085d54dc29fc92cdcc4a80b6a9d74ea1",
     "source":       ""
   }
 }
