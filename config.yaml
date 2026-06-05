@@ -2,7 +2,7 @@ node:
   name: chainmind-node-1
   host: 0.0.0.0
   port: 8000
-  api_token: 1d3eccb90368cedb3f2e435778ab15de128807329e2bd687
+  api_token: 
 network:
   heartbeat_interval: 30
   discovery_interval: 60
@@ -24,14 +24,14 @@ tokens:
     pro: 20
     enterprise: 50
 central:
-  enabled: true
+  enabled: false
   url: https://chainmind.com.ng
-  node_secret: 8a006f8aa4388f273e09ff36de2d2d30b95cb02b5e3a20c24e097842a53a1067
+  node_secret: 
   poll_interval: 3
   heartbeat_interval: 30
 privacy:
   encrypt_tasks: true
-  encryption_key: Wb33EijsxuME14LoSiAiEyev5Zp0uCkdEdAISJVqtH0=
+  encryption_key: 
   mask_prompts_in_dashboard: true
 models:
   tiny:
