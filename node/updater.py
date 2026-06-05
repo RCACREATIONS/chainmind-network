@@ -327,7 +327,20 @@ def check_and_apply(
     try:
         _download(url, tmp, progress_cb=progress_cb, status_cb=status_cb)
     except Exception as e:
-        result.error = f"Download failed: {e}"
+        err_str = str(e)
+        if "404" in err_str or "Not Found" in err_str:
+            releases_url = f"https://github.com/RCACREATIONS/chainmind-network/releases/tag/v{info.version}"
+            result.error = (
+                f"Binary not available for download (private repository).\n"
+                f"Visit the releases page to download manually:\n{releases_url}"
+            )
+            try:
+                import webbrowser as _wb
+                _wb.open(releases_url)
+            except Exception:
+                pass
+        else:
+            result.error = f"Download failed: {e}"
         return result
 
     # Verify checksum

@@ -180,10 +180,17 @@ def _do_update(info: dict, current: str, latest: str):
     print(f"\n{YELLOW}  ↑ Update available: {current} → {latest}{RESET}")
     print(f"{YELLOW}  Downloading…{RESET}")
 
+    releases_page = f"https://github.com/RCACREATIONS/chainmind-network/releases/tag/v{latest}"
     try:
         import httpx
         tmp = Path(tempfile.gettempdir()) / f"chainmind_update_{latest}"
         with httpx.stream("GET", url, follow_redirects=True, timeout=300) as resp:
+            if resp.status_code == 404:
+                print(f"{YELLOW}  Binary not available (private repository).{RESET}")
+                print(f"{YELLOW}  Opening releases page in your browser: {releases_page}{RESET}")
+                webbrowser.open(releases_page)
+                return
+            resp.raise_for_status()
             total = int(resp.headers.get("content-length", 0))
             done  = 0
             with open(tmp, "wb") as f:

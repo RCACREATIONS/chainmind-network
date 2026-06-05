@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading as _threading_mod
 import time
 from pathlib import Path
 
@@ -335,6 +336,12 @@ def _update_notification_banner():
     except Exception:
         _cv = "0.0.0"
 
+    # Module-level relay dict — background thread writes here (never touches st.*)
+    # Main Streamlit thread reads and copies into session_state.
+    _relay: dict = _threading_mod._update_relay if hasattr(_threading_mod, "_update_relay") else {}
+    if not hasattr(_threading_mod, "_update_relay"):
+        _threading_mod._update_relay = _relay
+
     # Only check once per session
     if "update_check_done" not in st.session_state:
         st.session_state["update_check_done"]    = False
@@ -347,15 +354,22 @@ def _update_notification_banner():
                 from node.updater import fetch_latest, version_gt
                 info = fetch_latest()
                 if info and version_gt(info.version, _cv):
-                    st.session_state["update_available"]   = True
-                    st.session_state["update_new_version"] = info.version
-                    st.session_state["update_changelog"]   = info.changelog
+                    _relay["available"]   = True
+                    _relay["new_version"] = info.version
+                    _relay["changelog"]   = info.changelog
             except Exception:
                 pass
             finally:
-                st.session_state["update_check_done"] = True
+                _relay["done"] = True
 
-        _threading.Thread(target=_bg_check, daemon=True).start()
+        _threading_mod.Thread(target=_bg_check, daemon=True, name="Thread-5 (_bg_check)").start()
+
+    # Pick up background-thread results in the main Streamlit thread
+    if not st.session_state.get("update_check_done") and _relay.get("done"):
+        st.session_state["update_check_done"]  = True
+        st.session_state["update_available"]   = _relay.get("available", False)
+        st.session_state["update_new_version"] = _relay.get("new_version", "")
+        st.session_state["update_changelog"]   = _relay.get("changelog", "")
 
     if st.session_state.get("update_available"):
         _new = st.session_state.get("update_new_version", "")
