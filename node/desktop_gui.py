@@ -59,22 +59,25 @@ def _resolve_log_dir() -> Path:
 
 
 # ── Stat polling via node HTTP API ───────────────────────────────────────────
-def _fetch_stats(node_port: int) -> dict:
+def _fetch_stats(node_port: int, api_token: str = "") -> dict:
     try:
         import httpx
-        base = f"http://localhost:{node_port}"
-        stats  = httpx.get(f"{base}/stats",   timeout=2).json()
-        net    = httpx.get(f"{base}/network", timeout=2).json()
-        system = httpx.get(f"{base}/system",  timeout=2).json()
+        base    = f"http://localhost:{node_port}"
+        headers = {"Authorization": f"Bearer {api_token}"} if api_token else {}
+        stats  = httpx.get(f"{base}/stats",          headers=headers, timeout=3).json()
+        net    = httpx.get(f"{base}/network/status", headers=headers, timeout=3).json()
+        system = httpx.get(f"{base}/system",                          timeout=3).json()
+        rep    = stats.get("reputation", {})
+        hw     = system.get("hardware", {})
         return {
             "online": True,
             "peers":  net.get("online_peers", 0),
-            "jobs":   stats.get("jobs_done", 0),
-            "iq":     stats.get("reputation", {}).get("iq_earned", 0.0),
-            "tier":   stats.get("reputation", {}).get("tier", "nano"),
-            "uptime": system.get("uptime_seconds", 0),
-            "ram_gb": system.get("hardware", {}).get("ram_gb", "?"),
-            "cpu":    system.get("hardware", {}).get("cpu_cores", "?"),
+            "jobs":   stats.get("total_tasks", 0),
+            "iq":     rep.get("iq_earned", 0.0),
+            "tier":   rep.get("tier", "nano"),
+            "uptime": rep.get("uptime", "—"),
+            "ram_gb": hw.get("ram_gb", "?"),
+            "cpu":    hw.get("cpu_cores", "?"),
         }
     except Exception:
         return {"online": False}
@@ -118,6 +121,7 @@ class ChainMindGUI:
         self._stop_all     = stop_all_cb
         self._node_port    = cfg.get("node",      {}).get("port",  8000)
         self._dash_port    = cfg.get("dashboard", {}).get("port",  8501)
+        self._api_token    = cfg.get("node",      {}).get("api_token", "")
         self._assets       = _resolve_assets()
         self._log_dir      = _resolve_log_dir()
         self._destroyed    = False
@@ -249,8 +253,8 @@ class ChainMindGUI:
                   fg=C_TEXT, bg=C_PANEL).pack(anchor="w")
 
         # ── Node log tail ─────────────────────────────────────────────────────
-        log_hdr = Frame(root, bg=C_BG, padx=14, pady=(6, 0))
-        log_hdr.pack(fill="x")
+        log_hdr = Frame(root, bg=C_BG, padx=14)
+        log_hdr.pack(fill="x", pady=(6, 0))
         Label(log_hdr, text="Node Log", font=("Segoe UI", 10, "bold"),
               fg=C_ACCENT_LT, bg=C_BG).pack(side="left")
         tk.Button(log_hdr, text="⟳ Refresh", font=("Segoe UI", 8),
@@ -292,7 +296,7 @@ class ChainMindGUI:
         self._root.after(self.POLL_INTERVAL, self._poll)
 
     def _fetch_and_update(self):
-        stats = _fetch_stats(self._node_port)
+        stats = _fetch_stats(self._node_port, self._api_token)
         if not self._destroyed:
             self._root.after(0, lambda: self._apply_stats(stats))
             self._root.after(0, self._refresh_log)
@@ -309,7 +313,8 @@ class ChainMindGUI:
             self._stat_vars["peers"].set(str(s.get("peers", 0)))
             self._stat_vars["iq"].set(f"{float(s.get('iq', 0)):.4f} IQ")
             self._stat_vars["jobs"].set(str(s.get("jobs", 0)))
-            self._stat_vars["uptime"].set(_fmt_uptime(s.get("uptime", 0)))
+            uptime = s.get("uptime", "—")
+            self._stat_vars["uptime"].set(uptime if isinstance(uptime, str) else _fmt_uptime(uptime))
             self._stat_vars["tier"].set(str(s.get("tier", "—")).upper())
             ram = s.get("ram_gb", "?")
             cpu = s.get("cpu", "?")
