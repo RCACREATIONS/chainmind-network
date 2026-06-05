@@ -212,58 +212,35 @@ def _to_dataframe(data) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
+
+# Load the brand logo (icon.png) as base64 for reliable inline embedding.
+import base64 as _b64, os as _logo_os, sys as _logo_sys
+_logo_b64: str = ""
+for _logo_candidate in [
+    _logo_os.path.join(getattr(_logo_sys, "_MEIPASS", ""), "assets", "icon.png"),
+    _logo_os.path.join(_logo_os.path.dirname(_logo_os.path.abspath(__file__)),
+                       "..", "assets", "icon.png"),
+]:
+    if _logo_os.path.exists(_logo_candidate):
+        with open(_logo_candidate, "rb") as _lf:
+            _logo_b64 = _b64.b64encode(_lf.read()).decode()
+        break
+
 with st.sidebar:
-    # ── ChainMind brand logo — CM cube + network nodes + wordmark ─────────────
-    _CM_LOGO = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" width="90" height="90">
-      <defs>
-        <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%"   stop-color="#a855f7"/>
-          <stop offset="100%" stop-color="#6366f1"/>
-        </linearGradient>
-      </defs>
-      <!-- Wireframe cube (thin dark lines) -->
-      <g stroke="#1e1b4b" stroke-width="1.6" fill="none" stroke-linejoin="round" opacity="0.5">
-        <polygon points="110,22 166,52 166,112 110,142 54,112 54,52"/>
-        <line x1="110" y1="22"  x2="110" y2="82"/>
-        <line x1="166" y1="52"  x2="110" y2="82"/>
-        <line x1="54"  y1="52"  x2="110" y2="82"/>
-        <line x1="110" y1="82"  x2="110" y2="142"/>
-        <line x1="110" y1="82"  x2="166" y2="112"/>
-        <line x1="110" y1="82"  x2="54"  y2="112"/>
-      </g>
-      <!-- Network node dots -->
-      <g fill="#2e1065" opacity="0.75">
-        <circle cx="110" cy="22"  r="4.5"/>
-        <circle cx="166" cy="52"  r="4.5"/>
-        <circle cx="54"  cy="52"  r="4.5"/>
-        <circle cx="110" cy="82"  r="4.5"/>
-        <circle cx="166" cy="112" r="4.5"/>
-        <circle cx="54"  cy="112" r="4.5"/>
-        <circle cx="110" cy="142" r="4.5"/>
-        <circle cx="138" cy="37"  r="3"/>
-        <circle cx="82"  cy="37"  r="3"/>
-      </g>
-      <!-- C letterform (gradient, chunky rounded) -->
-      <path d="M 56,148 L 56,88
-               Q 56,72 72,72 L 98,72 L 98,84
-               L 74,84 Q 68,84 68,90
-               L 68,146 Q 68,152 74,152
-               L 98,152 L 98,164
-               L 72,164 Q 56,164 56,148 Z"
-            fill="url(#g1)"/>
-      <!-- M letterform (gradient) -->
-      <path d="M 104,72 L 118,72 L 132,106 L 146,72
-               L 160,72 L 160,164
-               L 148,164 L 148,106
-               L 132,132 L 116,106
-               L 116,164 L 104,164 Z"
-            fill="url(#g1)"/>
-    </svg>"""
+    # ── ChainMind brand logo ───────────────────────────────────────────────────
+    if _logo_b64:
+        _logo_html = (
+            f"<img src='data:image/png;base64,{_logo_b64}' "
+            f"width='90' height='90' style='border-radius:12px;display:block;margin:0 auto'/>"
+        )
+    else:
+        _logo_html = "<div style='font-size:40px;text-align:center'>🔮</div>"
+
     st.markdown(
         f"<div style='text-align:center;padding:10px 0 2px'>"
-        f"{_CM_LOGO}"
+        f"{_logo_html}"
         f"<div style='font-size:13px;font-weight:900;color:{PURPLE};"
-        f"letter-spacing:.14em;margin-top:0px;font-family:\"Segoe UI\",system-ui,sans-serif'>"
+        f"letter-spacing:.14em;margin-top:6px;font-family:\"Segoe UI\",system-ui,sans-serif'>"
         f"CHAINMIND</div>"
         f"<div style='font-size:9px;color:#6d28d9;font-weight:600;letter-spacing:.18em;margin-top:2px'>"
         f"NETWORK</div>"

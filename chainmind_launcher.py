@@ -31,25 +31,44 @@ from pathlib import Path
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  Resolve paths — works both frozen (PyInstaller) and plain Python
 # ─────────────────────────────────────────────────────────────────────────────
-if getattr(sys, "frozen", False):
-    BUNDLE_DIR  = Path(sys._MEIPASS)
-    INSTALL_DIR = Path(sys.executable).parent
-else:
-    BUNDLE_DIR  = Path(__file__).parent
-    INSTALL_DIR = Path(__file__).parent
+def _get_user_data_dir() -> Path:
+    """
+    Platform-specific user-writable data directory.
+    Keeps config + database out of the install/exe folder so the app
+    works correctly when installed to Program Files or any read-only location.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+        return Path(base) / "ChainMind"
+    elif sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "ChainMind"
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+        return Path(xdg) / "chainmind"
 
-DATA_DIR    = INSTALL_DIR / "data"
-CONFIG_FILE = INSTALL_DIR / "config.yaml"
+
+if getattr(sys, "frozen", False):
+    BUNDLE_DIR    = Path(sys._MEIPASS)
+    INSTALL_DIR   = Path(sys.executable).parent
+    USER_DATA_DIR = _get_user_data_dir()
+else:
+    BUNDLE_DIR    = Path(__file__).parent
+    INSTALL_DIR   = Path(__file__).parent
+    USER_DATA_DIR = INSTALL_DIR   # dev mode: data lives alongside the source
+
+USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR    = USER_DATA_DIR / "data"
+CONFIG_FILE = USER_DATA_DIR / "config.yaml"
 LOG_DIR     = DATA_DIR / "logs"
-DATA_DIR.mkdir(exist_ok=True)
-LOG_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 if str(BUNDLE_DIR) not in sys.path:
     sys.path.insert(0, str(BUNDLE_DIR))
 
 # Tell every subprocess exactly where config.yaml lives so they don't have
 # to guess — avoids the _MEIPASS vs install-dir confusion.
-os.environ["CHAINMIND_CONFIG"] = str(INSTALL_DIR / "config.yaml")
+os.environ["CHAINMIND_CONFIG"] = str(CONFIG_FILE)
 
 os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "true")
@@ -376,7 +395,7 @@ def _create_desktop_shortcut() -> None:
         # Pass --no-setup so the shortcut never re-fires the wizard,
         # and set CHAINMIND_CONFIG via an env var wrapper argument so the
         # node always finds the pre-configured config.yaml regardless of cwd.
-        cfg_path_arg = str(INSTALL_DIR / "config.yaml")
+        cfg_path_arg = str(CONFIG_FILE)
 
         ps_lines = [
             "$ws = New-Object -ComObject WScript.Shell",
@@ -492,14 +511,20 @@ def _win_install(cfg: dict) -> None:
     shutil.copy2(str(exe_src), str(exe_dst))
     print(f"{GREEN}done{RESET}")
 
-    # ── 2. Copy config.yaml + VERSION ─────────────────────────────────────────
-    for fname in ("config.yaml", "VERSION"):
-        src = INSTALL_DIR / fname
-        if src.exists():
-            shutil.copy2(str(src), str(install_dir / fname))
+    # ── 2. Copy VERSION to install dir; seed config in user data dir ──────────
+    ver_src = INSTALL_DIR / "VERSION"
+    if ver_src.exists():
+        shutil.copy2(str(ver_src), str(install_dir / "VERSION"))
+    if not CONFIG_FILE.exists():
+        for _cfg_src in [INSTALL_DIR / "config.yaml", BUNDLE_DIR / "config.yaml"]:
+            if _cfg_src.exists():
+                USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(_cfg_src), str(CONFIG_FILE))
+                break
 
     # ── 3. Ensure data/logs directory ─────────────────────────────────────────
     (install_dir / "data" / "logs").mkdir(parents=True, exist_ok=True)
+    (USER_DATA_DIR / "data" / "logs").mkdir(parents=True, exist_ok=True)
 
     # ── 4. Resolve icon path ──────────────────────────────────────────────────
     ico = str(exe_dst)   # fallback: Windows extracts icon from .exe
@@ -667,11 +692,16 @@ def _mac_install(cfg: dict) -> None:
     os.chmod(str(binary_dst), 0o755)
     print(f"{GREEN}done{RESET}")
 
-    # ── 3. Copy config.yaml + VERSION ────────────────────────────────────────
-    for fname in ("config.yaml", "VERSION"):
-        src = INSTALL_DIR / fname
-        if src.exists():
-            shutil.copy2(str(src), str(macos_dir / fname))
+    # ── 3. Copy VERSION; seed config in user data dir ────────────────────────
+    ver_src = INSTALL_DIR / "VERSION"
+    if ver_src.exists():
+        shutil.copy2(str(ver_src), str(macos_dir / "VERSION"))
+    if not CONFIG_FILE.exists():
+        for _cfg_src in [INSTALL_DIR / "config.yaml", BUNDLE_DIR / "config.yaml"]:
+            if _cfg_src.exists():
+                USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(_cfg_src), str(CONFIG_FILE))
+                break
 
     # ── 4. Copy icon into Resources ───────────────────────────────────────────
     for candidate in [
@@ -853,11 +883,16 @@ def _linux_install(cfg: dict) -> None:
     os.chmod(str(binary_dst), 0o755)
     print(f"{GREEN}done{RESET}")
 
-    # ── 3. Copy config.yaml + VERSION ────────────────────────────────────────
-    for fname in ("config.yaml", "VERSION"):
-        src = INSTALL_DIR / fname
-        if src.exists():
-            shutil.copy2(str(src), str(install_dir / fname))
+    # ── 3. Copy VERSION; seed config in user data dir ────────────────────────
+    ver_src = INSTALL_DIR / "VERSION"
+    if ver_src.exists():
+        shutil.copy2(str(ver_src), str(install_dir / "VERSION"))
+    if not CONFIG_FILE.exists():
+        for _cfg_src in [INSTALL_DIR / "config.yaml", BUNDLE_DIR / "config.yaml"]:
+            if _cfg_src.exists():
+                USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(_cfg_src), str(CONFIG_FILE))
+                break
 
     # ── 4. Copy icon ──────────────────────────────────────────────────────────
     for candidate in [
@@ -1284,28 +1319,30 @@ def main():
     cfg = maybe_run_wizard()
 
     # ── Frozen-mode config relocation ──────────────────────────────────────────
+    # config.yaml lives in USER_DATA_DIR (%APPDATA%\ChainMind on Windows,
+    # ~/Library/Application Support/ChainMind on macOS, ~/.config/chainmind on Linux).
+    # Seed it from the bundle or install dir on first run if not yet present.
     if getattr(sys, "frozen", False):
         import shutil as _shutil
         import yaml as _yaml
-        install_cfg = INSTALL_DIR / "config.yaml"
-        bundle_cfg  = BUNDLE_DIR / "config.yaml"
-        if not install_cfg.exists():
-            if bundle_cfg.exists():
-                _shutil.copy2(str(bundle_cfg), str(install_cfg))
+        if not CONFIG_FILE.exists():
+            for candidate in [
+                BUNDLE_DIR / "config.yaml",
+                BUNDLE_DIR.parent / "config.yaml",
+                INSTALL_DIR / "config.yaml",
+                Path(sys.executable).parent / "config.yaml",
+            ]:
+                if candidate.exists() and candidate.resolve() != CONFIG_FILE.resolve():
+                    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    _shutil.copy2(str(candidate), str(CONFIG_FILE))
+                    break
             else:
-                for candidate in [
-                    BUNDLE_DIR.parent / "config.yaml",
-                    Path(sys.executable).parent / "config.yaml",
-                ]:
-                    if candidate.exists() and candidate != install_cfg:
-                        _shutil.copy2(str(candidate), str(install_cfg))
-                        break
-                else:
-                    if cfg:
-                        with open(install_cfg, "w") as _f:
-                            _yaml.dump(cfg, _f, default_flow_style=False)
-        if install_cfg.exists():
-            with open(install_cfg) as _f:
+                if cfg:
+                    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    with open(CONFIG_FILE, "w") as _f:
+                        _yaml.dump(cfg, _f, default_flow_style=False)
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE) as _f:
                 cfg = _yaml.safe_load(_f) or cfg
 
     # ── One-time setup tasks (only when running from the install dir) ──────────
