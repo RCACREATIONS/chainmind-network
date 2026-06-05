@@ -47,8 +47,8 @@ class CentralClient:
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5, read=90, write=10, pool=5),
             headers={
-                "X-Node-Secret": self.secret,
-                "X-Node-Id":     self.node_id,
+                "X-Node-Secret": self.secret   or "",
+                "X-Node-Id":     self.node_id  or "",
                 "Content-Type":  "application/json",
             },
         )
