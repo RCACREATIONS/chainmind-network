@@ -356,61 +356,96 @@ def _download_ollama():
 # 6.  Desktop shortcut
 
 
+# Public URL for the ChainMind brand icon — used as the authoritative source
+# for icon.ico so existing users always get the correct icon even if the
+# bundled assets are unavailable.
+ICON_REMOTE_URL = (
+    "https://chainmind.com.ng/ChatGPT%20Image%20Jun%202,%202026,%2006_43_57%20AM.png"
+)
+
+
 def _get_permanent_ico_path() -> Path:
     """
-    Return the path where icon.ico is stored permanently (next to exe or in
-    USER_DATA_DIR).  This path survives PyInstaller's _MEIPASS cleanup.
+    The ONE canonical permanent location for icon.ico.
+    This is the install dir (next to the exe) — i.e.
+    %LOCALAPPDATA%\\Programs\\ChainMind Network\\icon.ico
+    That directory is never cleaned up, so shortcuts pointing here are stable.
     """
-    # Preferred: alongside the installed exe (most reliable for shortcuts)
-    exe_dir_ico = Path(sys.executable).parent / "icon.ico"
-    if exe_dir_ico.exists():
-        return exe_dir_ico.resolve()
-    # Second: user data dir (AppData\Roaming\ChainMind)
-    data_ico = USER_DATA_DIR / "icon.ico"
-    if data_ico.exists():
-        return data_ico.resolve()
-    return data_ico  # may not exist yet — caller must check
+    return INSTALL_DIR / "icon.ico"
+
+
+def _download_icon_as_ico(dest: Path) -> bool:
+    """
+    Download ICON_REMOTE_URL (a PNG) and convert it to a multi-size .ico file
+    saved at *dest*.  Pillow is bundled with the exe so the conversion is
+    always available.  Returns True on success.
+    """
+    try:
+        import urllib.request as _ur
+        import io as _io
+        from PIL import Image as _Img
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        with _ur.urlopen(ICON_REMOTE_URL, timeout=15) as resp:
+            data = resp.read()
+
+        img = _Img.open(_io.BytesIO(data)).convert("RGBA")
+        sizes = [16, 32, 48, 64, 128, 256]
+        frames = [img.resize((s, s), _Img.LANCZOS) for s in sizes]
+        frames[0].save(
+            str(dest),
+            format="ICO",
+            sizes=[(s, s) for s in sizes],
+            append_images=frames[1:],
+        )
+        return dest.exists()
+    except Exception:
+        return False
 
 
 def _ensure_icon_persisted() -> Path:
     """
-    Copy icon.ico from the PyInstaller bundle to a permanent location so that
-    desktop shortcuts and the taskbar always show the correct icon — even after
-    the temp _MEIPASS directory is cleaned up on exit.
+    Guarantee that icon.ico exists at the permanent install-dir path
+    (%LOCALAPPDATA%\\Programs\\ChainMind Network\\icon.ico).
 
-    Returns the permanent icon path (guaranteed to exist after this call, or
-    falls back to the exe itself if copying failed).
+    Strategy (tried in order):
+      1. Already there → done.
+      2. Download fresh from ICON_REMOTE_URL and convert PNG → ICO.
+      3. Copy from PyInstaller bundle assets (fallback for offline installs).
+      4. Give up — return exe path so Windows extracts the embedded icon.
+
+    After writing, _repair_shortcut_icons() is called so that existing
+    shortcuts are immediately updated to the new permanent path.
     """
     if sys.platform != "win32":
         return Path(sys.executable)
 
     perm = _get_permanent_ico_path()
 
-    # Already in place — nothing to do
     if perm.exists():
         return perm
 
-    # Find the source icon inside the bundle
-    src: Path | None = None
+    # ── 1. Try downloading from the remote URL ────────────────────────────────
+    if _download_icon_as_ico(perm):
+        return perm
+
+    # ── 2. Copy from bundle assets (works while _MEIPASS is alive) ────────────
     for candidate in [
         BUNDLE_DIR  / "assets" / "icon.ico",
         INSTALL_DIR / "assets" / "icon.ico",
     ]:
         if candidate.exists():
-            src = candidate
-            break
+            try:
+                import shutil as _sh
+                perm.parent.mkdir(parents=True, exist_ok=True)
+                _sh.copy2(str(candidate), str(perm))
+                if perm.exists():
+                    return perm
+            except Exception:
+                pass
 
-    if src is None:
-        return Path(sys.executable)  # fallback: Windows extracts from exe
-
-    try:
-        perm.parent.mkdir(parents=True, exist_ok=True)
-        import shutil as _sh
-        _sh.copy2(str(src), str(perm))
-    except Exception:
-        pass
-
-    return perm if perm.exists() else Path(sys.executable)
+    return Path(sys.executable)  # final fallback
 
 
 def _get_ico_path() -> str:
