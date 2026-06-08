@@ -353,15 +353,153 @@ def _download_ollama():
 # 6.  Desktop shortcut
 
 
+def _get_permanent_ico_path() -> Path:
+    """
+    Return the path where icon.ico is stored permanently (next to exe or in
+    USER_DATA_DIR).  This path survives PyInstaller's _MEIPASS cleanup.
+    """
+    # Preferred: alongside the installed exe (most reliable for shortcuts)
+    exe_dir_ico = Path(sys.executable).parent / "icon.ico"
+    if exe_dir_ico.exists():
+        return exe_dir_ico.resolve()
+    # Second: user data dir (AppData\Roaming\ChainMind)
+    data_ico = USER_DATA_DIR / "icon.ico"
+    if data_ico.exists():
+        return data_ico.resolve()
+    return data_ico  # may not exist yet — caller must check
+
+
+def _ensure_icon_persisted() -> Path:
+    """
+    Copy icon.ico from the PyInstaller bundle to a permanent location so that
+    desktop shortcuts and the taskbar always show the correct icon — even after
+    the temp _MEIPASS directory is cleaned up on exit.
+
+    Returns the permanent icon path (guaranteed to exist after this call, or
+    falls back to the exe itself if copying failed).
+    """
+    if sys.platform != "win32":
+        return Path(sys.executable)
+
+    perm = _get_permanent_ico_path()
+
+    # Already in place — nothing to do
+    if perm.exists():
+        return perm
+
+    # Find the source icon inside the bundle
+    src: Path | None = None
+    for candidate in [
+        BUNDLE_DIR  / "assets" / "icon.ico",
+        INSTALL_DIR / "assets" / "icon.ico",
+    ]:
+        if candidate.exists():
+            src = candidate
+            break
+
+    if src is None:
+        return Path(sys.executable)  # fallback: Windows extracts from exe
+
+    try:
+        perm.parent.mkdir(parents=True, exist_ok=True)
+        import shutil as _sh
+        _sh.copy2(str(src), str(perm))
+    except Exception:
+        pass
+
+    return perm if perm.exists() else Path(sys.executable)
+
+
 def _get_ico_path() -> str:
-    """Return path to icon.ico for use in shortcuts/taskbar. Falls back to exe."""
+    """
+    Return the best available icon path for shortcuts.
+    Checks permanent locations first so shortcuts never point into _MEIPASS.
+    """
+    # 1. Permanent location next to exe / in user data dir
+    perm = _get_permanent_ico_path()
+    if perm.exists():
+        return str(perm)
+    # 2. Bundle dir (may be _MEIPASS — acceptable for first-install shortcut
+    #    creation, _ensure_icon_persisted() will fix it on next launch)
     for candidate in [
         BUNDLE_DIR  / "assets" / "icon.ico",
         INSTALL_DIR / "assets" / "icon.ico",
     ]:
         if candidate.exists():
             return str(candidate.resolve())
+    # 3. Final fallback: Windows extracts icon embedded in the exe
     return str(Path(sys.executable).resolve())
+
+
+def _repair_shortcut_icons() -> None:
+    """
+    Run on every launch (Windows only).  Finds all ChainMind .lnk shortcuts
+    on the Desktop and in the Start Menu and updates their IconLocation to the
+    permanent icon path.  This silently fixes existing users whose shortcuts
+    ended up pointing to a deleted _MEIPASS directory.
+    """
+    if sys.platform != "win32":
+        return
+
+    ico = _get_ico_path()
+    # Only repair if we have a real .ico file (not the exe fallback)
+    if not ico.lower().endswith(".ico") or not os.path.exists(ico):
+        return
+
+    lnk_paths: list[str] = []
+
+    # Desktop shortcut
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    desk_lnk = os.path.join(desktop, "ChainMind Node.lnk")
+    if os.path.exists(desk_lnk):
+        lnk_paths.append(desk_lnk)
+
+    # Start Menu shortcuts
+    appdata = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+    sm_dir  = os.path.join(appdata, "Microsoft", "Windows",
+                           "Start Menu", "Programs", "ChainMind Network")
+    if os.path.isdir(sm_dir):
+        for name in ("ChainMind Node.lnk", "Uninstall ChainMind.lnk"):
+            p = os.path.join(sm_dir, name)
+            if os.path.exists(p):
+                lnk_paths.append(p)
+
+    if not lnk_paths:
+        return
+
+    try:
+        import base64
+
+        # Build a PowerShell script that re-stamps IconLocation on every lnk
+        ps_lines = ["$ws = New-Object -ComObject WScript.Shell"]
+        for lnk in lnk_paths:
+            lnk_esc = lnk.replace("\\", "\\\\")
+            ico_esc = ico.replace("\\", "\\\\")
+            ps_lines += [
+                f'$sc = $ws.CreateShortcut("{lnk_esc}")',
+                f'$sc.IconLocation = "{ico_esc},0"',
+                "$sc.Save()",
+            ]
+
+        ps_script = "; ".join(ps_lines)
+        encoded   = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
+            capture_output=True,
+            timeout=15,
+        )
+        # Flush Windows icon cache so the change is visible immediately
+        subprocess.run(
+            ["ie4uinit.exe", "-show"],
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        pass  # non-fatal — icon repair is best-effort
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 def _create_desktop_shortcut() -> None:
     """
@@ -386,15 +524,10 @@ def _create_desktop_shortcut() -> None:
         shortcut  = os.path.join(desktop, "ChainMind Node.lnk")
 
         if os.path.exists(shortcut):
+            # Shortcut already exists — still repair its icon in case it's stale
+            _repair_shortcut_icons()
             return
 
-        # Build the script with double-quoted PS strings (safe for apostrophes).
-        # Backslashes in paths are fine inside double-quoted PS strings.
-        # We then base64-encode the whole thing as UTF-16LE so PowerShell's
-        # argument parser never sees any special characters at all.
-        # Pass --no-setup so the shortcut never re-fires the wizard,
-        # and set CHAINMIND_CONFIG via an env var wrapper argument so the
-        # node always finds the pre-configured config.yaml regardless of cwd.
         cfg_path_arg = str(CONFIG_FILE)
 
         ps_lines = [
@@ -526,14 +659,22 @@ def _win_install(cfg: dict) -> None:
     (install_dir / "data" / "logs").mkdir(parents=True, exist_ok=True)
     (USER_DATA_DIR / "data" / "logs").mkdir(parents=True, exist_ok=True)
 
-    # ── 4. Resolve icon path ──────────────────────────────────────────────────
+    # ── 4. Resolve icon path — copy to install dir for a permanent reference ───
+    # Shortcuts MUST point to a file that survives PyInstaller _MEIPASS cleanup.
+    # We copy icon.ico to install_dir so it lives next to the exe permanently.
+    ico_dst = install_dir / "icon.ico"
     ico = str(exe_dst)   # fallback: Windows extracts icon from .exe
     for candidate in [
         BUNDLE_DIR  / "assets" / "icon.ico",
         INSTALL_DIR / "assets" / "icon.ico",
     ]:
         if candidate.exists():
-            ico = str(candidate.resolve())
+            try:
+                import shutil as _sh
+                _sh.copy2(str(candidate), str(ico_dst))
+                ico = str(ico_dst)
+            except Exception:
+                ico = str(candidate.resolve())
             break
 
     exe_str     = str(exe_dst)
@@ -1345,6 +1486,12 @@ def main():
             with open(CONFIG_FILE) as _f:
                 cfg = _yaml.safe_load(_f) or cfg
 
+    # ── Persist icon.ico to a permanent path (Windows only) ───────────────────
+    # Must happen BEFORE shortcut creation/repair so _get_ico_path() returns
+    # the permanent file.  Safe no-op on macOS/Linux and if already in place.
+    if sys.platform == "win32":
+        _ensure_icon_persisted()
+
     # ── One-time setup tasks (only when running from the install dir) ──────────
     # The installer already created shortcuts on Windows; these are no-ops if
     # shortcuts/registry entries already exist.
@@ -1352,6 +1499,12 @@ def main():
         _create_desktop_shortcut()
         if sys.platform == "win32" and not _is_registered_for_startup():
             _register_windows_startup()
+
+    # ── Repair shortcut icons on every launch (existing users) ─────────────────
+    # Silently re-stamps IconLocation on Desktop + Start Menu .lnk files so
+    # they always point to the permanent icon.ico, not a deleted _MEIPASS path.
+    if sys.platform == "win32":
+        threading.Thread(target=_repair_shortcut_icons, daemon=True).start()
 
     # ── Background update check ────────────────────────────────────────────────
     threading.Thread(
