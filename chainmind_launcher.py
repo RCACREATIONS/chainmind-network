@@ -1360,7 +1360,18 @@ def main():
         daemon=True,
     ).start()
 
-    _ensure_ollama()
+    # ── Ollama bootstrap: install → start server → pull recommended model ────
+    try:
+        from node.ollama_bootstrap import ensure_ollama_ready
+        _catalog = cfg.get("models", {}) if isinstance(cfg, dict) else {}
+        _result = ensure_ollama_ready(catalog=_catalog, verbose=True)
+        if _result.get("skipped") and not _result.get("installed"):
+            # New bootstrap couldn't find or install Ollama — fall back to
+            # the legacy interactive installer so the user still gets prompted.
+            _ensure_ollama()
+    except Exception as _boot_exc:
+        print(f"{YELLOW}  Ollama bootstrap error: {_boot_exc} — falling back.{RESET}")
+        _ensure_ollama()
 
     signal.signal(signal.SIGINT,  _on_exit)
     signal.signal(signal.SIGTERM, _on_exit)

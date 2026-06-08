@@ -31,7 +31,6 @@ _start_ollama() {
 case "$CMD" in
     node)
         python -m node.setup_wizard
-        _start_ollama
         echo "Starting ChainMind node..."
         python -m node.cli node start
         ;;
@@ -40,7 +39,6 @@ case "$CMD" in
         ;;
     all)
         python -m node.setup_wizard
-        _start_ollama
         echo "Starting node in background..."
         python -m node.cli node start &
         sleep 3

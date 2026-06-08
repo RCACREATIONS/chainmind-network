@@ -332,6 +332,14 @@ def run_wizard(cfg: dict) -> dict:
         print("     in the dashboard.")
     print()
 
+    # ── Ollama Engine Setup ───────────────────────────────────────────────────
+    print("══ AI Engine (Ollama) ══════════════════════════")
+    print("   ChainMind uses Ollama to run AI models locally.")
+    print("   We will now install Ollama (if needed) and download")
+    print("   the best model for your hardware automatically.")
+    print()
+    run_ollama_setup(cfg, verbose=True)
+
     return _print_summary(cfg)
 
 
@@ -385,8 +393,50 @@ def _print_summary(cfg: dict) -> dict:
     return cfg
 
 
+def run_ollama_setup(cfg: dict, verbose: bool = True) -> None:
+    """
+    Run the Ollama bootstrap as part of the setup wizard or startup sequence.
+    Installs Ollama if missing, starts it, and pulls the recommended model.
+    Safe to call on every startup — idempotent.
+    """
+    try:
+        from .ollama_bootstrap import ensure_ollama_ready
+    except ImportError:
+        from node.ollama_bootstrap import ensure_ollama_ready
+
+    catalog = cfg.get("models", {})
+
+    print()
+    print("══ Ollama AI Engine Setup ══════════════════════")
+
+    result = ensure_ollama_ready(catalog=catalog, verbose=verbose)
+
+    if result.get("skipped"):
+        print("⚠  Ollama could not be installed automatically.")
+        print("   Download it from https://ollama.ai/download")
+        print("   The node will start without AI inference support.")
+    elif result.get("running"):
+        models = result.get("models", [])
+        pulled = result.get("model_pulled")
+        if pulled:
+            print(f"✅ Model '{pulled}' downloaded and ready.")
+        elif models:
+            print(f"✅ Ollama running · Models: {', '.join(models)}")
+        else:
+            print("✅ Ollama running. Pull a model from the Models page in the dashboard.")
+    else:
+        print("⚠  Ollama is installed but could not be started.")
+        print("   It will be retried when the node starts.")
+    print()
+
+
 def maybe_run_wizard() -> dict:
-    """Load config.yaml; run wizard if node.name is the generic default or missing."""
+    """
+    Load config.yaml; run wizard if node.name is the generic default or missing.
+    On every startup (wizard or not) runs the Ollama bootstrap so that:
+      - New users: Ollama is installed + recommended model is pulled during wizard
+      - Existing users: Ollama is started if not running; missing models are pulled
+    """
     if _cfg_path.exists():
         with open(_cfg_path) as f:
             saved = yaml.safe_load(f) or {}
@@ -408,9 +458,18 @@ def maybe_run_wizard() -> dict:
         needs_setup = False
 
     if needs_setup:
+        # First run: wizard handles Ollama setup interactively
         cfg = run_wizard(cfg)
         with open(_cfg_path, "w") as f:
             yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    else:
+        # Existing user restart: silently ensure Ollama is running + model exists
+        # Skip if CHAINMIND_NO_OLLAMA=1 (e.g. server-only or CI environments)
+        if os.environ.get("CHAINMIND_NO_OLLAMA") != "1":
+            try:
+                run_ollama_setup(cfg, verbose=True)
+            except Exception as exc:
+                print(f"[Ollama] Bootstrap warning: {exc}")
 
     return cfg
 

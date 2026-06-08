@@ -76,28 +76,33 @@ def _find_ollama() -> Optional[str]:
 # ── Node commands ─────────────────────────────────────────────────────────────
 @node_app.command("start")
 def node_start():
-    """Start the ChainMind node server (auto-starts Ollama if needed)."""
+    """Start the ChainMind node server (auto-installs/starts Ollama + pulls recommended model)."""
     console.print(Panel("[bold]Starting ChainMind Network Node…[/bold]", style="purple", expand=False))
 
-    ollama_exe = _find_ollama()
-    if ollama_exe:
-        try:
-            httpx.get("http://localhost:11434/api/tags", timeout=2)
-            console.print("[dim]Ollama already running.[/dim]")
-        except Exception:
-            console.print("[cyan]Starting Ollama in background…[/cyan]")
-            subprocess.Popen(
-                [ollama_exe, "serve"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+    # ── Ollama bootstrap: install → start → pull recommended model ────────────
+    try:
+        from node.ollama_bootstrap import ensure_ollama_ready
+        with console.status("[cyan]Checking Ollama AI engine…[/cyan]"):
+            result = ensure_ollama_ready(catalog=CATALOG, verbose=False)
+
+        if result.get("skipped"):
+            console.print(
+                "[yellow]⚠ Ollama not found.[/yellow] "
+                "Install from [link=https://ollama.ai/download]https://ollama.ai/download[/link]"
             )
-            time.sleep(3)
-            console.print("[green]Ollama started.[/green]")
-    else:
-        console.print(
-            "[yellow]Ollama not found.[/yellow] Install from https://ollama.ai/download "
-            "or re-run install.bat"
-        )
+        elif result.get("running"):
+            pulled = result.get("model_pulled")
+            models = result.get("models", [])
+            if pulled:
+                console.print(f"[green]✅ Ollama ready · Model pulled: {pulled}[/green]")
+            elif models:
+                console.print(f"[green]✅ Ollama ready · Models: {', '.join(models[:3])}[/green]")
+            else:
+                console.print("[green]✅ Ollama running.[/green]")
+        else:
+            console.print("[yellow]⚠ Ollama installed but could not start.[/yellow]")
+    except Exception as exc:
+        console.print(f"[yellow]Ollama bootstrap warning: {exc}[/yellow]")
 
     import uvicorn
     from node.server import app as fastapi_app
