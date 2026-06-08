@@ -204,9 +204,12 @@ def _do_update(info: dict, current: str, latest: str):
         import httpx
         tmp = Path(tempfile.gettempdir()) / f"chainmind_update_{latest}"
         with httpx.stream("GET", url, follow_redirects=True, timeout=300) as resp:
-            if resp.status_code == 404:
-                print(f"{YELLOW}  Binary not available (private repository).{RESET}")
-                print(f"{YELLOW}  Opening releases page in your browser: {releases_page}{RESET}")
+            if resp.status_code not in (200,):
+                # Binary not ready yet (building) or not available — send user to
+                # the releases page so they can download manually when it's ready.
+                print(f"{YELLOW}  Binary not yet available for this release "
+                      f"(HTTP {resp.status_code}).{RESET}")
+                print(f"{YELLOW}  Opening releases page: {releases_page}{RESET}")
                 webbrowser.open(releases_page)
                 return
             resp.raise_for_status()
