@@ -20,6 +20,7 @@ def _conn(db_path: str) -> sqlite3.Connection:
 
 def init_db(db_path: str) -> sqlite3.Connection:
     con = _conn(db_path)
+    # CREATE TABLE statements as a script (no functions needed — safe on all SQLite versions)
     con.executescript("""
         CREATE TABLE IF NOT EXISTS tasks (
             id          TEXT PRIMARY KEY,
@@ -40,7 +41,7 @@ def init_db(db_path: str) -> sqlite3.Connection:
             total_tasks     INTEGER DEFAULT 0,
             total_tokens    INTEGER DEFAULT 0,
             iq_earned       REAL    DEFAULT 0.0,
-            uptime_start    REAL    NOT NULL,
+            uptime_start    REAL    NOT NULL DEFAULT 0,
             last_heartbeat  REAL
         );
 
@@ -73,9 +74,13 @@ def init_db(db_path: str) -> sqlite3.Connection:
             reason      TEXT,
             ts          REAL NOT NULL
         );
-
-        INSERT OR IGNORE INTO node_stats (id, uptime_start) VALUES (1, unixepoch());
     """)
+    # Use Python time.time() — avoids unixepoch() which requires SQLite 3.38+
+    # and fails on systems where PyInstaller links an older libsqlite3.so
+    con.execute(
+        "INSERT OR IGNORE INTO node_stats (id, uptime_start) VALUES (1, ?)",
+        (time.time(),)
+    )
     con.commit()
     return con
 

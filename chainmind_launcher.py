@@ -1031,10 +1031,11 @@ def _linux_install_dir() -> Path:
     return Path.home() / ".local" / "share" / "chainmind-network"
 
 
-def _linux_install(cfg: dict) -> None:
+def _linux_install(cfg: dict, autostart: bool = False) -> None:
     """
-    Install to ~/.local/share/chainmind-network/, create .desktop entries and
-    autostart, then launch the installed binary and exit.
+    Install to ~/.local/share/chainmind-network/, create .desktop entries,
+    then launch the installed binary and exit.
+    Autostart (launch at login) is opt-in via --autostart flag.
     Always ends with sys.exit(0).
     """
     import shutil
@@ -1102,23 +1103,27 @@ def _linux_install(cfg: dict) -> None:
     os.chmod(str(desktop_file), 0o755)
     print(f"{GREEN}done{RESET}")
 
-    # ── 6. Autostart entry ────────────────────────────────────────────────────
-    print(f"{CYAN}  Registering auto-start…{RESET}", end=" ", flush=True)
-    autostart_entry = (
-        "[Desktop Entry]\n"
-        "Version=1.0\n"
-        "Type=Application\n"
-        "Name=ChainMind Node\n"
-        f"Exec={binary_dst} --no-setup --no-browser\n"
-        f"{icon_line}\n"
-        "Terminal=false\n"
-        "X-GNOME-Autostart-enabled=true\n"
-        "Comment=ChainMind Network node — starts at login\n"
-    )
-    autostart_file = autostart_dir / "chainmind-network.desktop"
-    autostart_file.write_text(autostart_entry, encoding="utf-8")
-    os.chmod(str(autostart_file), 0o755)
-    print(f"{GREEN}done{RESET}")
+    # ── 6. Autostart entry (opt-in only — pass --autostart to enable) ─────────
+    if autostart:
+        print(f"{CYAN}  Registering auto-start…{RESET}", end=" ", flush=True)
+        autostart_dir.mkdir(parents=True, exist_ok=True)
+        autostart_entry = (
+            "[Desktop Entry]\n"
+            "Version=1.0\n"
+            "Type=Application\n"
+            "Name=ChainMind Node\n"
+            f"Exec={binary_dst} --no-setup --no-browser\n"
+            f"{icon_line}\n"
+            "Terminal=false\n"
+            "X-GNOME-Autostart-enabled=true\n"
+            "Comment=ChainMind Network node — starts at login\n"
+        )
+        autostart_file = autostart_dir / "chainmind-network.desktop"
+        autostart_file.write_text(autostart_entry, encoding="utf-8")
+        os.chmod(str(autostart_file), 0o755)
+        print(f"{GREEN}done{RESET}")
+    else:
+        print(f"{CYAN}  Auto-start: {YELLOW}disabled{RESET} (pass --autostart to enable launch at login)")
 
     # ── 7. Symlink in ~/.local/bin ────────────────────────────────────────────
     link = bin_dir / "chainmind-node"
@@ -1407,14 +1412,33 @@ def _run_tray(cfg: dict, node_proc_ref: list, no_dashboard: bool):
     )
 
     # Background thread: watch the node process and restart on crash
+    # Crash-loop guard: if the node exits ≥5 times within 60 s we stop
+    # restarting — otherwise we'd thrash CPU on a hard error (e.g. DB crash).
     def _monitor():
+        crash_times: list[float] = []
+        backoff = 5   # seconds — doubles on each crash, capped at 60 s
         while True:
             time.sleep(5)
             p = node_proc_ref[0]
-            if p and p.poll() is not None:
-                print(f"{YELLOW}  Node process exited. Restarting…{RESET}")
-                _procs[:] = [x for x in _procs if x is not p]
-                node_proc_ref[0] = _launch_node(cfg)
+            if p is None or p.poll() is None:
+                backoff = 5   # reset backoff when node is healthy
+                continue
+
+            now = time.time()
+            crash_times = [t for t in crash_times if now - t < 60]
+            crash_times.append(now)
+
+            if len(crash_times) >= 5:
+                print(f"\n{YELLOW}  ⚠  Node crashed 5 times in 60 seconds — stopping auto-restart to prevent crash loop.{RESET}")
+                print(f"{YELLOW}     Check logs at: {LOG_DIR / 'node.log'}{RESET}")
+                print(f"{YELLOW}     Fix the issue then restart ChainMind manually.{RESET}\n")
+                break
+
+            print(f"{YELLOW}  Node process exited. Restarting in {backoff}s…{RESET}")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            _procs[:] = [x for x in _procs if x is not p]
+            node_proc_ref[0] = _launch_node(cfg)
 
     threading.Thread(target=_monitor, daemon=True).start()
 
@@ -1426,13 +1450,30 @@ def _console_wait_loop(node_proc_ref: list, cfg: dict):
     """Fallback when no system tray: watch node process in a console loop."""
     print(f"\n{BOLD}  ChainMind Node is running.{RESET}")
     print(f"  Press {YELLOW}Ctrl+C{RESET} to stop.\n")
+    crash_times: list[float] = []
+    backoff = 5
     while True:
         time.sleep(5)
         p = node_proc_ref[0]
-        if p and p.poll() is not None:
-            print(f"{YELLOW}  Node process exited. Restarting…{RESET}")
-            _procs[:] = [x for x in _procs if x is not p]
-            node_proc_ref[0] = _launch_node(cfg)
+        if p is None or p.poll() is None:
+            backoff = 5
+            continue
+
+        now = time.time()
+        crash_times = [t for t in crash_times if now - t < 60]
+        crash_times.append(now)
+
+        if len(crash_times) >= 5:
+            print(f"\n{YELLOW}  ⚠  Node crashed 5 times in 60 seconds — stopping auto-restart to prevent crash loop.{RESET}")
+            print(f"{YELLOW}     Check logs at: {LOG_DIR / 'node.log'}{RESET}")
+            print(f"{YELLOW}     Fix the issue then restart ChainMind manually.{RESET}\n")
+            break
+
+        print(f"{YELLOW}  Node process exited. Restarting in {backoff}s…{RESET}")
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 60)
+        _procs[:] = [x for x in _procs if x is not p]
+        node_proc_ref[0] = _launch_node(cfg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1448,6 +1489,8 @@ def main():
     parser.add_argument("--no-setup",     action="store_true",
                         help="Skip setup wizard (used by shortcuts launched from install dir)")
     parser.add_argument("--setup",        action="store_true", help="Re-run setup wizard")
+    parser.add_argument("--autostart",    action="store_true",
+                        help="(Linux install) Register node to launch automatically at login")
     parser.add_argument("--uninstall",    action="store_true", help="Uninstall ChainMind Node")
     args = parser.parse_args()
 
@@ -1483,7 +1526,7 @@ def main():
         elif sys.platform == "darwin":
             _mac_install(cfg)      # creates .app bundle, LaunchAgent, exits
         else:
-            _linux_install(cfg)    # copies to ~/.local/share/, .desktop, exits
+            _linux_install(cfg, autostart=getattr(args, "autostart", False))
 
     # ── Normal startup (running from install dir or non-Windows) ──────────────
     os.chdir(str(INSTALL_DIR))
