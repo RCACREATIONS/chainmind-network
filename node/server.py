@@ -162,7 +162,7 @@ async def health():
         "node": NODE_CFG["name"],
         "ollama": ollama_ok,
         "timestamp": time.time(),
-        "version": "1.4.7",
+        "version": "1.4.8",
     }
 
 @app.get("/capabilities")
