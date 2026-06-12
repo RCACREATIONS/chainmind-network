@@ -107,8 +107,7 @@ class CentralClient:
             log.warning(f"Could not seed counters from DB: {e}")
 
         # ── Detect multimodal capabilities once at startup ────────────────────
-        ollama_base = f"{self._ollama.base_url}" if hasattr(self._ollama, "base_url") \
-                      else "http://localhost:11434"
+        ollama_base = getattr(self.ollama, "base_url", "http://localhost:11434")
         try:
             self._capabilities = await detect_capabilities(ollama_base)
             # Auto-pull llava:7b if no vision model is available
