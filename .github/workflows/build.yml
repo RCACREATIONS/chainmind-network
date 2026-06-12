@@ -10,7 +10,6 @@
 # Produces:
 #   • ChainMind-Node-windows-x64.exe
 #   • ChainMind-Node-macos-arm64.zip   (Apple Silicon .app bundle — M1/M2/M3)
-#   • ChainMind-Node-macos-x64.zip     (Intel .app bundle — pre-2020 Macs)
 #   • ChainMind-Node-linux-x64
 #   • release/latest.json              (update manifest committed back to repo)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -24,16 +23,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build (e.g. 1.2.5 — no 'v' prefix)"
+        description: "Version to build (e.g. 1.5.0 — no 'v' prefix)"
         required: false
         default: "0.0.0"
 
 env:
   PYTHON_VERSION: "3.11"
-
-# ── Helper: resolve the version string for each platform ─────────────────────
-# (each job duplicates this because GitHub Actions has no shared "pre" step
-#  across jobs without an artifact)
 
 jobs:
   # ── Windows x64 ─────────────────────────────────────────────────────────────
@@ -81,7 +76,7 @@ jobs:
   # ── macOS arm64 (Apple Silicon — M1/M2/M3, all Macs since late 2020) ────────
   build-macos-arm64:
     name: macOS arm64 (Apple Silicon)
-    runs-on: macos-latest          # GitHub-hosted arm64 runner
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
