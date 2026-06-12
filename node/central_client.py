@@ -5,12 +5,14 @@ central_client.py — ChainMind Central Server integration.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 
 import httpx
 
 from .db import insert_task, update_task, get_stats
+from .image_and_vision import detect_capabilities, ensure_vision_model, handle_special_job
 
 log = logging.getLogger("central_client")
 
@@ -44,6 +46,7 @@ class CentralClient:
         self._running        = False
         self._public_ip      = None
         self._secret_invalid = False  # set True on 403 — prompts user to reconnect
+        self._capabilities: dict = {}  # populated at startup by _detect_capabilities()
 
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5, read=90, write=10, pool=5),
@@ -103,6 +106,20 @@ class CentralClient:
         except Exception as e:
             log.warning(f"Could not seed counters from DB: {e}")
 
+        # ── Detect multimodal capabilities once at startup ────────────────────
+        ollama_base = f"{self._ollama.base_url}" if hasattr(self._ollama, "base_url") \
+                      else "http://localhost:11434"
+        try:
+            self._capabilities = await detect_capabilities(ollama_base)
+            # Auto-pull llava:7b if no vision model is available
+            if not self._capabilities.get("vision"):
+                self._capabilities = await ensure_vision_model(
+                    self._capabilities, ollama_base
+                )
+        except Exception as exc:
+            log.warning(f"Capability detection failed: {exc}")
+            self._capabilities = {"file_qa": True}
+
         self._public_ip = await self._detect_public_ip()
         log.info(f"Central client starting — connecting to {self.base_url}")
         log.info(f"Node public URL: {self.public_url or '(localhost fallback)'}")
@@ -152,14 +169,27 @@ class CentralClient:
             model_names = [m.get("name", "") for m in models]
             tier = self._compute_tier()
             node_url = self.public_url or self._self_url()
+            caps = self._capabilities
+
+            # Build capabilities list for the server
+            cap_list = list(filter(None, [
+                "image_gen" if caps.get("image_gen")  else None,
+                "vision"    if caps.get("vision")     else None,
+                "file_qa",
+                f"engine:{caps.get('image_gen_engine', 'none')}",
+            ]))
+
             payload = {
-                "name":       self.node_name,
-                "url":        node_url,
-                "tier":       tier,
-                "models":     model_names,
-                "jobs_done":  self._jobs_done,
-                "iq_earned":  round(self._iq_earned, 6),
-                "reputation": round(self._reputation, 2),
+                "name":         self.node_name,
+                "url":          node_url,
+                "tier":         tier,
+                "models":       model_names,
+                "jobs_done":    self._jobs_done,
+                "iq_earned":    round(self._iq_earned, 6),
+                "reputation":   round(self._reputation, 2),
+                "capabilities": json.dumps(cap_list),
+                "vram_gb":      caps.get("vram_gb", 0),
+                "gpu_name":     caps.get("gpu_name", "") or "",
             }
             r = await self._http.post(f"{self.base_url}/api/node/heartbeat.php", json=payload)
             if r.status_code == 200:
@@ -210,13 +240,78 @@ class CentralClient:
         if not job:
             return
 
-        job_id = job["id"]
-        prompt = job["prompt"]
-        model  = job.get("model") or None
-        system = job.get("system_prompt", "")
+        job_id   = job["id"]
+        job_type = job.get("job_type", "text")
+        prompt   = job.get("prompt", "")
+        model    = job.get("model") or None
+        system   = job.get("system_prompt", "")
 
-        log.info(f"Claimed job {job_id[:8]}… model={model or 'auto'}")
-        await self._run_job(job_id, prompt, model, system)
+        log.info(f"Claimed job {job_id[:8]}… type={job_type} model={model or 'auto'}")
+
+        if job_type in ("image_gen", "vision", "file_qa"):
+            await self._run_multimodal_job(job)
+        else:
+            await self._run_job(job_id, prompt, model, system)
+
+    async def _run_multimodal_job(self, job: dict):
+        """Handle image_gen / vision / file_qa jobs via image_and_vision module."""
+        job_id = job["id"]
+        prompt = job.get("prompt", "")
+        ollama_base = getattr(self.ollama, "base_url", "http://localhost:11434")
+
+        insert_task(self.con, job_id, prompt, job.get("model") or "auto", routed_to="central")
+
+        try:
+            outcome = await handle_special_job(job, self._capabilities, ollama_base)
+        except Exception as exc:
+            log.error(f"Multimodal job {job_id[:8]}… error: {exc}")
+            outcome = {
+                "status": "error",
+                "result": str(exc),
+                "result_images": None,
+                "tokens_in": 0, "tokens_out": 0,
+                "duration_ms": 0,
+            }
+
+        update_task(
+            self.con, job_id, outcome["status"],
+            result=outcome["result"],
+            tokens_in=outcome.get("tokens_in", 0),
+            tokens_out=outcome.get("tokens_out", 0),
+            duration_ms=outcome.get("duration_ms", 0),
+        )
+
+        try:
+            payload: dict = {
+                "job_id":      job_id,
+                "status":      outcome["status"],
+                "result":      outcome["result"],
+                "tokens_in":   outcome.get("tokens_in", 0),
+                "tokens_out":  outcome.get("tokens_out", 0),
+                "duration_ms": outcome.get("duration_ms", 0),
+            }
+            if outcome.get("result_images"):
+                payload["result_images"] = outcome["result_images"]
+
+            r = await self._http.post(
+                f"{self.base_url}/api/node/submit-result.php",
+                json=payload,
+            )
+            if r.status_code == 200:
+                resp_data = r.json()
+                iq_delta  = resp_data.get("iq_earned", 0.0)
+                rep_delta = resp_data.get("rep_delta", 0.0)
+                self._jobs_done  += 1
+                self._iq_earned  += iq_delta
+                self._reputation  = max(0, min(1000, self._reputation + rep_delta))
+                log.info(
+                    f"Multimodal job {job_id[:8]}… done "
+                    f"status={outcome['status']} IQ+{iq_delta:.6f}"
+                )
+            else:
+                log.warning(f"submit-result returned {r.status_code}: {r.text[:200]}")
+        except Exception as exc:
+            log.error(f"Failed to submit multimodal result for {job_id[:8]}: {exc}")
 
     async def _run_job(self, job_id: str, prompt: str, model, system: str):
         start  = time.monotonic()
@@ -295,6 +390,11 @@ class CentralClient:
 
         except Exception as e:
             log.error(f"Failed to submit result for job {job_id[:8]}: {e}")
+
+    @property
+    def capabilities(self) -> dict:
+        """Current multimodal capabilities dict (populated at startup)."""
+        return self._capabilities
 
     def _self_url(self) -> str:
         port = self.node_cfg.get("port", 8000)

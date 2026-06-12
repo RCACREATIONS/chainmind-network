@@ -162,7 +162,24 @@ async def health():
         "node": NODE_CFG["name"],
         "ollama": ollama_ok,
         "timestamp": time.time(),
-        "version": "1.0.0",
+        "version": "1.4.5",
+    }
+
+@app.get("/capabilities")
+async def capabilities():
+    """Return this node's multimodal capabilities (image gen, vision, file Q&A)."""
+    caps = central.capabilities if central else {}
+    return {
+        "image_gen":         caps.get("image_gen", False),
+        "image_gen_engine":  caps.get("image_gen_engine"),
+        "vision":            caps.get("vision", False),
+        "vision_model":      caps.get("vision_model"),
+        "file_qa":           caps.get("file_qa", True),
+        "gpu":               caps.get("gpu", False),
+        "gpu_name":          caps.get("gpu_name"),
+        "vram_gb":           caps.get("vram_gb", 0),
+        "ram_gb":            caps.get("ram_gb", 0),
+        "disk_free_gb":      caps.get("disk_free_gb", 0),
     }
 
 @app.get("/stats")

@@ -539,6 +539,43 @@ elif page == "🖥 System":
             )
 
     st.divider()
+    st.subheader("🧠 Multimodal Capabilities")
+    st.caption("What this node can handle beyond plain text inference.")
+    caps_data = fetch("/capabilities") or {}
+    if caps_data:
+        ca, cb, cc = st.columns(3)
+        def _cap_badge(enabled: bool, label: str, detail: str = "") -> str:
+            if enabled:
+                return (
+                    f"<div class='cm-card' style='text-align:center'>"
+                    f"<div style='font-size:28px'>✅</div>"
+                    f"<div style='font-weight:700;color:#065f46;margin:4px 0'>{label}</div>"
+                    f"<div style='font-size:12px;color:#6d28d9'>{detail}</div></div>"
+                )
+            return (
+                f"<div class='cm-card' style='text-align:center;opacity:.55'>"
+                f"<div style='font-size:28px'>—</div>"
+                f"<div style='font-weight:700;color:#6b7280;margin:4px 0'>{label}</div>"
+                f"<div style='font-size:12px;color:#9ca3af'>{detail or 'Not available'}</div></div>"
+            )
+        engine = caps_data.get("image_gen_engine") or ""
+        vision = caps_data.get("vision_model") or ""
+        ca.markdown(_cap_badge(caps_data.get("image_gen", False), "Image Generation",
+                               engine.upper() if engine else ""), unsafe_allow_html=True)
+        cb.markdown(_cap_badge(caps_data.get("vision", False), "Vision / Images",
+                               vision if vision else ""), unsafe_allow_html=True)
+        cc.markdown(_cap_badge(True, "File Q&A", "Always available"), unsafe_allow_html=True)
+
+        gpu_name = caps_data.get("gpu_name") or ""
+        vram     = caps_data.get("vram_gb", 0)
+        if gpu_name:
+            st.markdown(
+                f"<div style='font-size:13px;color:#6d28d9;margin-top:6px'>"
+                f"🖥 <b>{gpu_name}</b> — {vram} GB VRAM</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
     st.subheader("Compatible Models")
     st.caption("Only models that fit your RAM and disk space are marked as available.")
     if compat:

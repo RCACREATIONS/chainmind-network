@@ -83,6 +83,23 @@ def get_system_info() -> dict[str, Any]:
         except Exception:
             pass
 
+    # ── GPU — Apple Silicon (unified memory) ─────────────────────────────────
+    if not info["has_gpu"] and platform.system() == "Darwin":
+        try:
+            out = subprocess.run(
+                ["sysctl", "hw.memsize"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if out.returncode == 0:
+                mem_bytes = int(out.stdout.split(":")[1].strip())
+                # Apple Silicon shares system RAM with GPU; estimate 75% usable as VRAM
+                vram = round(mem_bytes / (1024 ** 3) * 0.75, 1)
+                info["has_gpu"]     = True
+                info["gpu_name"]    = "Apple Silicon (unified)"
+                info["gpu_vram_gb"] = vram
+        except Exception:
+            pass
+
     return info
 
 
