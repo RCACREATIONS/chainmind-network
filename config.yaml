@@ -1,0 +1,88 @@
+node:
+  name: chainmind-node-1
+  host: 0.0.0.0
+  port: 8000
+  api_token: 
+network:
+  heartbeat_interval: 30
+  discovery_interval: 60
+  max_peers: 50
+  bootstrap_peers: []
+ollama:
+  host: http://localhost
+  port: 11434
+dashboard:
+  port: 8501
+database:
+  path: data/node.db
+tokens:
+  base_rate: 0.001
+  tier_multipliers:
+    nano: 1
+    micro: 3
+    standard: 8
+    pro: 20
+    enterprise: 50
+central:
+  enabled: false
+  url: https://chainmind.com.ng
+  node_secret: 
+  poll_interval: 3
+  heartbeat_interval: 30
+privacy:
+  encrypt_tasks: true
+  encryption_key: 
+  mask_prompts_in_dashboard: true
+models:
+  tiny:
+  - name: qwen2:0.5b
+    label: "Qwen2 0.5B \xE2\u20AC\u201D Fastest, any machine"
+    ram_gb: 1.0
+    disk_gb: 0.4
+  - name: tinyllama
+    label: "TinyLlama 1.1B \xE2\u20AC\u201D Good for low-RAM"
+    ram_gb: 2.0
+    disk_gb: 0.6
+  - name: phi3:mini
+    label: "Phi-3 Mini 3.8B \xE2\u20AC\u201D Best tiny quality"
+    ram_gb: 4.0
+    disk_gb: 2.3
+  small:
+  - name: llama3.2:1b
+    label: "Llama3.2 1B \xE2\u20AC\u201D Very fast"
+    ram_gb: 2.0
+    disk_gb: 1.3
+  - name: llama3.2:3b
+    label: "Llama3.2 3B \xE2\u20AC\u201D Recommended for 8GB RAM"
+    ram_gb: 4.0
+    disk_gb: 2.0
+  - name: gemma2:2b
+    label: "Gemma2 2B \xE2\u20AC\u201D Google's small model"
+    ram_gb: 4.0
+    disk_gb: 1.6
+  medium:
+  - name: mistral
+    label: "Mistral 7B \xE2\u20AC\u201D Best balance"
+    ram_gb: 8.0
+    disk_gb: 4.1
+  - name: llama3.1:8b
+    label: "Llama3.1 8B \xE2\u20AC\u201D Recommended for 16GB RAM"
+    ram_gb: 10.0
+    disk_gb: 4.7
+  - name: gemma2:9b
+    label: "Gemma2 9B \xE2\u20AC\u201D Google's medium model"
+    ram_gb: 12.0
+    disk_gb: 5.4
+  large:
+  - name: llama3.1:70b
+    label: "Llama3.1 70B \xE2\u20AC\u201D Server-grade only"
+    ram_gb: 48.0
+    disk_gb: 40.0
+  - name: mixtral:8x7b
+    label: "Mixtral 8x7B \xE2\u20AC\u201D Expert mixture"
+    ram_gb: 32.0
+    disk_gb: 26.0
+  - name: qwen2:72b
+    label: "Qwen2 72B \xE2\u20AC\u201D Maximum quality"
+    ram_gb: 48.0
+    disk_gb: 41.0

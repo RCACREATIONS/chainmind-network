@@ -1,0 +1,11 @@
+GENERATED_NODE_TOKEN.txt
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/node_id.txt
+data/node.log
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.replit
