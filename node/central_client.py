@@ -5,6 +5,7 @@ central_client.py — ChainMind Central Server integration.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 
@@ -187,7 +188,30 @@ class CentralClient:
             await asyncio.sleep(self.poll_ivl)
 
     async def _poll_once(self):
-        r = await self._http.get(f"{self.base_url}/api/node/claim-job.php")
+        # Advertise image_gen capability if ready
+        from .image_gen import is_imgenv_ready, is_model_downloaded
+        caps_parts = []
+        if is_imgenv_ready():
+            # Check if any SD model is available
+            try:
+                from .image_gen import _MODEL_MAP, _MODEL_DIR
+                for entry in _MODEL_MAP.values():
+                    model_id = entry[0]
+                    safe = model_id.replace("/", "--")
+                    if (_MODEL_DIR / safe).exists():
+                        caps_parts.append("image_gen")
+                        break
+            except Exception:
+                pass
+
+        headers = {}
+        if caps_parts:
+            headers["X-Node-Capabilities"] = ",".join(caps_parts)
+
+        r = await self._http.get(
+            f"{self.base_url}/api/node/claim-job.php",
+            headers=headers,
+        )
 
         # ===== PATCH 1: CREDIT HANDLING =====
         if r.status_code == 402:
@@ -210,13 +234,23 @@ class CentralClient:
         if not job:
             return
 
-        job_id = job["id"]
-        prompt = job["prompt"]
-        model  = job.get("model") or None
-        system = job.get("system_prompt", "")
+        job_id   = job["id"]
+        prompt   = job["prompt"]
+        model    = job.get("model") or None
+        system   = job.get("system_prompt", "")
+        job_type = job.get("job_type", "text")
 
-        log.info(f"Claimed job {job_id[:8]}… model={model or 'auto'}")
-        await self._run_job(job_id, prompt, model, system)
+        log.info(f"Claimed job {job_id[:8]}… type={job_type} model={model or 'auto'}")
+
+        if job_type == "image_gen":
+            image_params_raw = job.get("image_params")
+            try:
+                image_params = json.loads(image_params_raw) if image_params_raw else {}
+            except Exception:
+                image_params = {}
+            await self._run_image_job(job_id, prompt, model, image_params)
+        else:
+            await self._run_job(job_id, prompt, model, system)
 
     async def _run_job(self, job_id: str, prompt: str, model, system: str):
         start  = time.monotonic()
@@ -295,6 +329,111 @@ class CentralClient:
 
         except Exception as e:
             log.error(f"Failed to submit result for job {job_id[:8]}: {e}")
+
+    async def _run_image_job(self, job_id: str, prompt: str, model: str | None, params: dict):
+        """Handle an image_gen job: generate image via imgenv, submit base64 to central server."""
+        start  = time.monotonic()
+        status = "error"
+        b64    = None
+
+        insert_task(self.con, job_id, prompt, "image_gen", routed_to="central")
+
+        try:
+            from .image_gen import (
+                generate_image,
+                get_image_model_for_hw,
+                is_imgenv_ready,
+                is_model_downloaded,
+                _MODEL_MAP,
+            )
+            from .system_check import get_system_info
+
+            if not is_imgenv_ready():
+                raise RuntimeError("Image generation venv not ready on this node.")
+
+            # Determine which model to use
+            if model:
+                model_id = model
+            else:
+                hw       = get_system_info()
+                model_id = get_image_model_for_hw(hw)[0]
+
+            if not is_model_downloaded(model_id):
+                raise RuntimeError(f"Model '{model_id}' not downloaded on this node.")
+
+            width          = int(params.get("width",  512))
+            height         = int(params.get("height", 512))
+            steps          = int(params.get("steps",  20))
+            guidance_scale = float(params.get("guidance_scale", 7.5))
+            negative_prompt = params.get("negative_prompt", "")
+            seed           = int(params.get("seed", -1))
+
+            b64 = await generate_image(
+                prompt=prompt,
+                model_id=model_id,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                steps=steps,
+                guidance_scale=guidance_scale,
+                seed=seed,
+            )
+
+            if b64:
+                status = "done"
+                log.info(f"Image job {job_id[:8]}… done — base64 length {len(b64)}")
+            else:
+                raise RuntimeError("Image worker returned no output.")
+
+        except Exception as e:
+            log.error(f"Image job {job_id[:8]}… failed: {e}")
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        _img_result = "[image_gen]" if status == "done" else "Node error: image generation failed"
+        update_task(
+            self.con,
+            job_id,
+            status,
+            result=_img_result,
+            tokens_in=0,
+            tokens_out=0,
+            duration_ms=duration_ms,
+        )
+
+        try:
+            payload: dict = {
+                "job_id":      job_id,
+                "status":      status,
+                "result":      "",
+                "tokens_in":   0,
+                "tokens_out":  0,
+                "duration_ms": duration_ms,
+            }
+            if b64:
+                payload["result_images"] = [b64]
+
+            r = await self._http.post(
+                f"{self.base_url}/api/node/submit-result.php",
+                json=payload,
+            )
+
+            if r.status_code == 200:
+                resp_data = r.json()
+                iq_delta  = resp_data.get("iq_earned", 0.0)
+                rep_delta = resp_data.get("rep_delta", 0.0)
+                self._jobs_done += 1
+                self._iq_earned += iq_delta
+                self._reputation = max(0, min(1000, self._reputation + rep_delta))
+                if iq_delta > 0:
+                    log.info(
+                        f"IQ earned: +{iq_delta:.6f}  |  session total: {self._iq_earned:.6f}"
+                    )
+            else:
+                log.warning(f"submit-result returned {r.status_code}: {r.text[:200]}")
+
+        except Exception as e:
+            log.error(f"Failed to submit image result for job {job_id[:8]}: {e}")
 
     def _self_url(self) -> str:
         port = self.node_cfg.get("port", 8000)
