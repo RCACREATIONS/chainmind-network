@@ -1524,6 +1524,145 @@ elif page == "⚙️ Settings":
                 elif _pair_submit:
                     st.warning("Please paste a pairing token first.")
     st.divider()
+
+    # ── Image Generation ────────────────────────────────────────────────────────
+    st.subheader("🖼 Image Generation")
+
+    try:
+        from node.image_gen import (
+            is_imgenv_ready, is_model_downloaded,
+            get_image_model_for_hw, get_image_model_for_tier,
+            _MODEL_MAP, _READY_FILE, _VENV_DIR,
+        )
+        from node.system_check import get_system_info, get_tier_for_system
+        _imggen_available = True
+    except Exception:
+        _imggen_available = False
+
+    if not _imggen_available:
+        st.warning("Image generation module not found. Update your node software.")
+    else:
+        _hw         = get_system_info()
+        _hw_tier    = get_tier_for_system(_hw)
+        _env_ready  = is_imgenv_ready()
+        _model_id, _model_label = get_image_model_for_hw(_hw)
+        _model_dl   = is_model_downloaded(_model_id)
+
+        # Status grid
+        _env_badge  = "<span class='cm-badge-ok'>Installed</span>"   if _env_ready else "<span class='cm-badge-err'>Not installed</span>"
+        _model_badge = "<span class='cm-badge-ok'>Downloaded</span>"  if _model_dl  else "<span class='cm-badge-warn'>Not downloaded</span>"
+        _tier_badge  = f"<span style='background:#7c3aed;color:#fff;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:700'>{_hw_tier.upper()}</span>"
+
+        st.markdown(
+            f"<div class='cm-card'>"
+            f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px'>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>Hardware Tier</span><br/>{_tier_badge}</div>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>Diffusers Venv</span><br/>{_env_badge}</div>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>Assigned Model</span><br/><b>{_model_label}</b></div>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>Model Status</span><br/>{_model_badge}</div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+        if not _env_ready:
+            st.info(
+                "The image generation environment is not yet installed. "
+                "Click **Install** to set it up now (requires ~3 GB disk, takes a few minutes)."
+            )
+            if st.button("⚙️ Install Image Gen Environment", type="primary"):
+                _ig_progress = st.empty()
+                _ig_msgs: list[str] = []
+                def _ig_cb(msg: str):
+                    _ig_msgs.append(msg)
+                    _ig_progress.info("  \n".join(_ig_msgs[-12:]))
+
+                with st.spinner("Installing image generation environment…"):
+                    try:
+                        from node.image_gen import setup_imgenv
+                        ok = setup_imgenv(progress_cb=_ig_cb)
+                    except Exception as _e:
+                        ok = False
+                        _ig_cb(f"Error: {_e}")
+
+                _ig_progress.empty()
+                if ok:
+                    st.success("✅ Image generation environment installed!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Installation failed — check the node console log for details.")
+
+        elif _hw_tier == "nano" and not _model_dl:
+            # Nano: explicit enable toggle → background download
+            st.markdown(
+                f"**Nano tier** — Image generation uses the CPU-optimized model "
+                f"**{_model_label}** (~1.5 GB). Enable below to start the background download."
+            )
+            _nano_enabled = st.session_state.get("_imggen_nano_enabled", False)
+            _nano_toggle  = st.toggle(
+                "Enable image generation (starts background download)",
+                value=_nano_enabled,
+                key="_imggen_nano_toggle",
+            )
+            if _nano_toggle and not _nano_enabled:
+                st.session_state["_imggen_nano_enabled"] = True
+
+                _nano_prog = st.empty()
+                _nano_msgs: list[str] = []
+                def _nano_cb(msg: str):
+                    _nano_msgs.append(msg)
+                    _nano_prog.info("  \n".join(_nano_msgs[-10:]))
+
+                with st.spinner(f"Downloading {_model_label}…"):
+                    try:
+                        from node.image_gen import download_model
+                        _dl_ok = download_model(_model_id, progress_cb=_nano_cb)
+                    except Exception as _ne:
+                        _dl_ok = False
+                        _nano_cb(f"Error: {_ne}")
+
+                _nano_prog.empty()
+                if _dl_ok:
+                    st.success(f"✅ Model **{_model_label}** downloaded! Image generation is ready.")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Download failed — check your internet connection and try again.")
+
+            elif _model_dl:
+                st.success(f"✅ Image generation active — model **{_model_label}** ready.")
+
+        elif not _model_dl:
+            # Non-nano but model not downloaded yet
+            st.warning(f"Environment is ready but model **{_model_label}** is not yet downloaded.")
+            if st.button(f"⬇️ Download {_model_label}", type="primary"):
+                _dl_progress = st.empty()
+                _dl_msgs: list[str] = []
+                def _dl_cb(msg: str):
+                    _dl_msgs.append(msg)
+                    _dl_progress.info("  \n".join(_dl_msgs[-12:]))
+
+                with st.spinner(f"Downloading {_model_label}…"):
+                    try:
+                        from node.image_gen import download_model
+                        _dl_ok = download_model(_model_id, progress_cb=_dl_cb)
+                    except Exception as _de:
+                        _dl_ok = False
+                        _dl_cb(f"Error: {_de}")
+
+                _dl_progress.empty()
+                if _dl_ok:
+                    st.success(f"✅ Model **{_model_label}** downloaded! Restart the node to activate image gen jobs.")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Download failed — check your internet connection and try again.")
+        else:
+            st.success(
+                f"✅ Image generation active — **{_model_label}** ready to process jobs."
+            )
+
+    st.divider()
     st.subheader("IQ Token Economy")
     _tokens_cfg = CFG.get("tokens", {})
     _tier_mults = _tokens_cfg.get("tier_multipliers", {})
