@@ -188,21 +188,32 @@ class CentralClient:
             await asyncio.sleep(self.poll_ivl)
 
     async def _poll_once(self):
-        # Advertise image_gen capability if ready
-        from .image_gen import is_imgenv_ready, is_model_downloaded
         caps_parts = []
-        if is_imgenv_ready():
-            # Check if any SD model is available
-            try:
-                from .image_gen import _MODEL_MAP, _MODEL_DIR
-                for entry in _MODEL_MAP.values():
-                    model_id = entry[0]
-                    safe = model_id.replace("/", "--")
-                    if (_MODEL_DIR / safe).exists():
+
+        # image_gen capability
+        try:
+            from .image_gen import is_imgenv_ready as _ig_ready, _MODEL_DIR as _IG_MODEL_DIR, _MODEL_MAP as _IG_MAP
+            if _ig_ready():
+                for entry in _IG_MAP.values():
+                    safe = entry[0].replace("/", "--")
+                    if (_IG_MODEL_DIR / safe).exists():
                         caps_parts.append("image_gen")
                         break
-            except Exception:
-                pass
+        except Exception:
+            pass
+
+        # vision capability
+        try:
+            from .vision import is_visionenv_ready as _vis_ready, _MODEL_DIR as _VIS_MODEL_DIR
+            from .vision import _GPU_MODEL_ID, _CPU_MODEL_ID
+            if _vis_ready():
+                for mid in (_GPU_MODEL_ID, _CPU_MODEL_ID):
+                    safe = mid.replace("/", "--")
+                    if (_VIS_MODEL_DIR / safe).exists():
+                        caps_parts.append("vision")
+                        break
+        except Exception:
+            pass
 
         headers = {}
         if caps_parts:
@@ -249,6 +260,9 @@ class CentralClient:
             except Exception:
                 image_params = {}
             await self._run_image_job(job_id, prompt, model, image_params)
+        elif job_type == "vision":
+            image_b64 = job.get("image_b64", "")
+            await self._run_vision_job(job_id, prompt, model, image_b64)
         else:
             await self._run_job(job_id, prompt, model, system)
 
@@ -434,6 +448,94 @@ class CentralClient:
 
         except Exception as e:
             log.error(f"Failed to submit image result for job {job_id[:8]}: {e}")
+
+    async def _run_vision_job(self, job_id: str, prompt: str, model: str | None, image_b64: str):
+        """Handle a vision job: understand the image with LLaVA/Moondream, submit text answer."""
+        start  = time.monotonic()
+        status = "error"
+        answer = ""
+
+        insert_task(self.con, job_id, prompt, "vision", routed_to="central")
+
+        try:
+            from .vision import (
+                run_vision, is_visionenv_ready, is_model_downloaded,
+                get_vision_model_for_hw, _GPU_MODEL_ID, _CPU_MODEL_ID,
+            )
+            from .system_check import get_system_info
+
+            if not is_visionenv_ready():
+                raise RuntimeError("Vision venv not ready on this node.")
+
+            if not image_b64:
+                raise RuntimeError("No image data provided in the vision job.")
+
+            # Pick model: use server-specified if available, otherwise best local one
+            if model and is_model_downloaded(model):
+                model_id = model
+            else:
+                hw = get_system_info()
+                gpu_id, cpu_id = _GPU_MODEL_ID, _CPU_MODEL_ID
+                if is_model_downloaded(gpu_id):
+                    model_id = gpu_id
+                elif is_model_downloaded(cpu_id):
+                    model_id = cpu_id
+                else:
+                    raise RuntimeError("No vision model downloaded on this node.")
+
+            answer = await run_vision(
+                prompt=prompt,
+                image_b64=image_b64,
+                model_id=model_id,
+            )
+
+            if answer:
+                status = "done"
+                log.info(f"Vision job {job_id[:8]}… done — {len(answer)} chars")
+            else:
+                raise RuntimeError("Vision worker returned no output.")
+
+        except Exception as e:
+            answer = f"Node error: {e}"
+            log.error(f"Vision job {job_id[:8]}… failed: {e}")
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        update_task(
+            self.con, job_id, status,
+            result=answer,
+            tokens_in=0, tokens_out=0,
+            duration_ms=duration_ms,
+        )
+
+        try:
+            payload = {
+                "job_id":      job_id,
+                "status":      status,
+                "result":      answer,
+                "tokens_in":   0,
+                "tokens_out":  0,
+                "duration_ms": duration_ms,
+            }
+            r = await self._http.post(
+                f"{self.base_url}/api/node/submit-result.php",
+                json=payload,
+            )
+            if r.status_code == 200:
+                resp_data = r.json()
+                iq_delta  = resp_data.get("iq_earned", 0.0)
+                rep_delta = resp_data.get("rep_delta", 0.0)
+                self._jobs_done += 1
+                self._iq_earned += iq_delta
+                self._reputation = max(0, min(1000, self._reputation + rep_delta))
+                if iq_delta > 0:
+                    log.info(
+                        f"IQ earned: +{iq_delta:.6f}  |  session total: {self._iq_earned:.6f}"
+                    )
+            else:
+                log.warning(f"submit-result returned {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            log.error(f"Failed to submit vision result for job {job_id[:8]}: {e}")
 
     def _self_url(self) -> str:
         port = self.node_cfg.get("port", 8000)
