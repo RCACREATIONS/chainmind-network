@@ -343,6 +343,9 @@ def run_wizard(cfg: dict) -> dict:
     # ── Image Generation Setup ────────────────────────────────────────────────
     run_imgenv_setup(cfg, verbose=True)
 
+    # ── Vision Setup ──────────────────────────────────────────────────────────
+    run_visionenv_setup(cfg, verbose=True)
+
     return _print_summary(cfg)
 
 
@@ -456,6 +459,77 @@ def run_imgenv_setup(cfg: dict, verbose: bool = True) -> None:
             print(f"✅ Image model '{label}' ready.")
         else:
             print(f"⚠  Image model download failed. Retry from ⚙️ Settings in the dashboard.")
+    print()
+
+
+def run_visionenv_setup(cfg: dict, verbose: bool = True) -> None:
+    """
+    Set up the dedicated vision (LLaVA / Moondream) virtual environment.
+    Auto-downloads the GPU model for Standard / Pro / Enterprise tiers that have a GPU.
+    For Nano / Micro / no-GPU devices the venv is installed but the model is deferred
+    to the Settings page toggle.
+    Safe to call on every startup — idempotent.
+    """
+    try:
+        from .vision import (
+            is_visionenv_ready, setup_visionenv,
+            get_vision_model_for_hw, download_model,
+            is_model_downloaded, should_auto_enable,
+            _CPU_MODEL_ID, _CPU_MODEL_LABEL,
+        )
+        from .system_check import get_system_info, get_tier_for_system
+    except ImportError:
+        from node.vision import (
+            is_visionenv_ready, setup_visionenv,
+            get_vision_model_for_hw, download_model,
+            is_model_downloaded, should_auto_enable,
+            _CPU_MODEL_ID, _CPU_MODEL_LABEL,
+        )
+        from node.system_check import get_system_info, get_tier_for_system
+
+    print()
+    print("══ Vision Engine (LLaVA / Moondream) ══════════")
+
+    hw   = get_system_info()
+    tier = get_tier_for_system(hw)
+    auto = should_auto_enable(tier, hw)
+
+    if not is_visionenv_ready():
+        print("   Installing vision packages (transformers, torch…)")
+        print("   This takes a few minutes on first run.")
+        ok = setup_visionenv(progress_cb=lambda m: print(f"   {m}") if verbose else None)
+        if not ok:
+            print("⚠  Vision setup failed.")
+            print("   You can retry from ⚙️ Settings → Vision in the dashboard.")
+            print()
+            return
+    else:
+        if verbose:
+            print("✅ Vision environment already installed.")
+
+    model_id, label = get_vision_model_for_hw(hw)
+
+    if not auto:
+        print(
+            f"   {tier.capitalize()} tier"
+            + (" (no GPU)" if not hw.get("has_gpu") else "")
+            + f" — vision model ({label}) can be enabled in ⚙️ Settings."
+        )
+        print()
+        return
+
+    # Standard / Pro / Enterprise with GPU → auto-download
+    if is_model_downloaded(model_id):
+        if verbose:
+            print(f"✅ Vision model '{label}' already downloaded.")
+    else:
+        print(f"   Downloading vision model: {label} ({model_id})")
+        print("   This may take several minutes depending on your connection.")
+        ok = download_model(model_id, progress_cb=lambda m: print(f"   {m}") if verbose else None)
+        if ok:
+            print(f"✅ Vision model '{label}' ready.")
+        else:
+            print("⚠  Vision model download failed. Retry from ⚙️ Settings in the dashboard.")
     print()
 
 
