@@ -340,6 +340,9 @@ def run_wizard(cfg: dict) -> dict:
     print()
     run_ollama_setup(cfg, verbose=True)
 
+    # ── Image Generation Setup ────────────────────────────────────────────────
+    run_imgenv_setup(cfg, verbose=True)
+
     return _print_summary(cfg)
 
 
@@ -391,6 +394,69 @@ def _print_summary(cfg: dict) -> dict:
     print("Config saved to config.yaml. Starting node…")
     print()
     return cfg
+
+
+def run_imgenv_setup(cfg: dict, verbose: bool = True) -> None:
+    """
+    Set up the dedicated image-generation virtual environment.
+    Installs diffusers + torch into data/imgenv/ (separate from the main venv).
+    For non-Nano tiers, also downloads the appropriate model automatically.
+    Safe to call on every startup — idempotent.
+    """
+    try:
+        from .image_gen import (
+            is_imgenv_ready, setup_imgenv,
+            get_image_model_for_hw, download_model,
+            is_model_downloaded,
+        )
+        from .system_check import get_system_info, get_tier_for_system
+    except ImportError:
+        from node.image_gen import (
+            is_imgenv_ready, setup_imgenv,
+            get_image_model_for_hw, download_model,
+            is_model_downloaded,
+        )
+        from node.system_check import get_system_info, get_tier_for_system
+
+    print()
+    print("══ Image Generation Engine ═════════════════════")
+
+    hw   = get_system_info()
+    tier = get_tier_for_system(hw)
+
+    if not is_imgenv_ready():
+        print("   Installing image generation packages (diffusers, torch…)")
+        print("   This takes a few minutes on first run.")
+        ok = setup_imgenv(progress_cb=lambda m: print(f"   {m}") if verbose else None)
+        if not ok:
+            print("⚠  Image generation setup failed.")
+            print("   You can retry from ⚙️ Settings → Image Generation in the dashboard.")
+            print()
+            return
+    else:
+        if verbose:
+            print("✅ Image generation environment already installed.")
+
+    model_id, label = get_image_model_for_hw(hw)
+
+    if tier == "nano":
+        print(f"   Nano tier detected — CPU-only model ({label}) will download")
+        print("   when you enable Image Generation in ⚙️ Settings.")
+        print()
+        return
+
+    if is_model_downloaded(model_id):
+        if verbose:
+            print(f"✅ Image model '{label}' already downloaded.")
+    else:
+        print(f"   Downloading image model: {label} ({model_id})")
+        print("   This may take several minutes depending on your connection.")
+        ok = download_model(model_id, progress_cb=lambda m: print(f"   {m}") if verbose else None)
+        if ok:
+            print(f"✅ Image model '{label}' ready.")
+        else:
+            print(f"⚠  Image model download failed. Retry from ⚙️ Settings in the dashboard.")
+    print()
 
 
 def run_ollama_setup(cfg: dict, verbose: bool = True) -> None:
