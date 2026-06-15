@@ -1663,6 +1663,163 @@ elif page == "⚙️ Settings":
             )
 
     st.divider()
+
+    # ── Vision (LLaVA / Moondream) ──────────────────────────────────────────────
+    st.subheader("👁 Vision (Image Understanding)")
+
+    try:
+        from node.vision import (
+            is_visionenv_ready, is_model_downloaded,
+            get_vision_model_for_hw, should_auto_enable,
+            _GPU_MODEL_ID, _CPU_MODEL_ID,
+            _GPU_MODEL_LABEL, _CPU_MODEL_LABEL,
+        )
+        from node.system_check import get_system_info, get_tier_for_system
+        _vis_available = True
+    except Exception:
+        _vis_available = False
+
+    if not _vis_available:
+        st.warning("Vision module not found. Update your node software.")
+    else:
+        _vhw          = get_system_info()
+        _vtier        = get_tier_for_system(_vhw)
+        _venv_ready   = is_visionenv_ready()
+        _vauto        = should_auto_enable(_vtier, _vhw)
+        _vmodel_id, _vmodel_label = get_vision_model_for_hw(_vhw)
+        _vgpu_dl      = is_model_downloaded(_GPU_MODEL_ID)
+        _vcpu_dl      = is_model_downloaded(_CPU_MODEL_ID)
+        _vany_dl      = _vgpu_dl or _vcpu_dl
+
+        _vtier_label  = _vtier.upper()
+        _vgpu_present = _vhw.get("has_gpu", False)
+        _venv_badge   = "<span class='cm-badge-ok'>Installed</span>"  if _venv_ready else "<span class='cm-badge-err'>Not installed</span>"
+        _vmodel_badge = "<span class='cm-badge-ok'>Downloaded</span>" if _vany_dl    else "<span class='cm-badge-warn'>Not downloaded</span>"
+        _vtier_badge  = f"<span style='background:#7c3aed;color:#fff;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:700'>{_vtier_label}</span>"
+
+        _vauto_note = (
+            "Auto-enabled (Standard/Pro/Enterprise + GPU)" if _vauto
+            else ("GPU not detected — Settings toggle available" if _vtier in ("standard", "pro", "enterprise") else "Settings toggle (CPU model available)")
+        )
+
+        st.markdown(
+            f"<div class='cm-card'>"
+            f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px'>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>Hardware Tier</span><br/>{_vtier_badge}</div>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>Vision Venv</span><br/>{_venv_badge}</div>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>GPU Available</span><br/>{'✅ ' + _vhw.get('gpu_name','GPU') if _vgpu_present else '❌ CPU only'}</div>"
+            f"<div><span style='color:#6d28d9;font-weight:600'>Model Status</span><br/>{_vmodel_badge}</div>"
+            f"<div style='grid-column:1/-1'><span style='color:#6d28d9;font-weight:600'>Mode</span><br/>"
+            f"<span style='font-size:12px;color:#4c1d95'>{_vauto_note}</span></div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+        if not _venv_ready:
+            st.info(
+                "Vision environment not yet installed. "
+                "Click **Install** to set it up (requires ~3 GB disk, a few minutes)."
+            )
+            if st.button("⚙️ Install Vision Environment", type="primary", key="_vis_install_btn"):
+                _vp = st.empty()
+                _vm: list[str] = []
+                def _vic(msg):
+                    _vm.append(msg)
+                    _vp.info("  \n".join(_vm[-12:]))
+
+                with st.spinner("Installing vision environment…"):
+                    try:
+                        from node.vision import setup_visionenv
+                        _vok = setup_visionenv(progress_cb=_vic)
+                    except Exception as _ve:
+                        _vok = False
+                        _vic(f"Error: {_ve}")
+
+                _vp.empty()
+                if _vok:
+                    st.success("✅ Vision environment installed!")
+                    st.cache_data.clear(); st.rerun()
+                else:
+                    st.error("❌ Installation failed — check console log.")
+
+        elif _vauto and not _vgpu_dl:
+            # Standard/Pro/Enterprise with GPU — auto mode, model not yet downloaded
+            st.info(
+                f"Your device qualifies for automatic vision ({_vmodel_label}). "
+                "Click **Download** to get the GPU model now."
+            )
+            if st.button(f"⬇️ Download {_vmodel_label}", type="primary", key="_vis_gpu_dl_btn"):
+                _vdp = st.empty(); _vdm: list[str] = []
+                def _vdc(msg):
+                    _vdm.append(msg); _vdp.info("  \n".join(_vdm[-12:]))
+                with st.spinner(f"Downloading {_vmodel_label}…"):
+                    try:
+                        from node.vision import download_model as _vdl
+                        _vdok = _vdl(_GPU_MODEL_ID, progress_cb=_vdc)
+                    except Exception as _vde:
+                        _vdok = False; _vdc(f"Error: {_vde}")
+                _vdp.empty()
+                if _vdok:
+                    st.success(f"✅ **{_vmodel_label}** ready — vision jobs active!")
+                    st.cache_data.clear(); st.rerun()
+                else:
+                    st.error("❌ Download failed — check your internet connection.")
+
+        elif _vauto and _vgpu_dl:
+            st.success(f"✅ Vision active — **{_GPU_MODEL_LABEL}** (GPU) processing jobs automatically.")
+
+        else:
+            # Nano / Micro / no-GPU — Settings toggle for CPU model
+            st.markdown(
+                f"**{_vtier_label} tier"
+                + (" — no GPU detected" if not _vgpu_present and _vtier in ("standard","pro","enterprise") else "")
+                + f"** — Enable the CPU-optimised vision model "
+                f"(**{_CPU_MODEL_LABEL}**, ~2 GB) to process vision jobs on this device."
+            )
+
+            if _vcpu_dl:
+                st.success(f"✅ Vision active — **{_CPU_MODEL_LABEL}** (CPU) ready.")
+                if st.button("♻️ Re-download CPU model", key="_vis_cpu_redl"):
+                    _vrp = st.empty(); _vrm: list[str] = []
+                    def _vrc(msg):
+                        _vrm.append(msg); _vrp.info("  \n".join(_vrm[-10:]))
+                    with st.spinner(f"Re-downloading {_CPU_MODEL_LABEL}…"):
+                        try:
+                            from node.vision import download_model as _vcpudl
+                            _vrok = _vcpudl(_CPU_MODEL_ID, progress_cb=_vrc)
+                        except Exception as _vre:
+                            _vrok = False; _vrc(f"Error: {_vre}")
+                    _vrp.empty()
+                    if _vrok:
+                        st.success("✅ Re-downloaded."); st.cache_data.clear(); st.rerun()
+                    else:
+                        st.error("❌ Download failed.")
+            else:
+                _ven = st.session_state.get("_vision_cpu_enabled", False)
+                _vtoggle = st.toggle(
+                    f"Enable vision processing ({_CPU_MODEL_LABEL} — CPU, ~2 GB download)",
+                    value=_ven,
+                    key="_vision_cpu_toggle",
+                )
+                if _vtoggle and not _ven:
+                    st.session_state["_vision_cpu_enabled"] = True
+                    _vtp = st.empty(); _vtm: list[str] = []
+                    def _vtc(msg):
+                        _vtm.append(msg); _vtp.info("  \n".join(_vtm[-10:]))
+                    with st.spinner(f"Downloading {_CPU_MODEL_LABEL}…"):
+                        try:
+                            from node.vision import download_model as _vcpudl2
+                            _vtok = _vcpudl2(_CPU_MODEL_ID, progress_cb=_vtc)
+                        except Exception as _vte:
+                            _vtok = False; _vtc(f"Error: {_vte}")
+                    _vtp.empty()
+                    if _vtok:
+                        st.success(f"✅ **{_CPU_MODEL_LABEL}** downloaded! Vision jobs now active.")
+                        st.cache_data.clear(); st.rerun()
+                    else:
+                        st.error("❌ Download failed — check your internet connection and try again.")
+
+    st.divider()
     st.subheader("IQ Token Economy")
     _tokens_cfg = CFG.get("tokens", {})
     _tier_mults = _tokens_cfg.get("tier_multipliers", {})
