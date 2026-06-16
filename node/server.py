@@ -77,6 +77,18 @@ CATALOG    = CFG.get("models", {})
 NODE_ID  = load_node_id(DATA_DIR)
 SELF_URL = f"http://localhost:{NODE_CFG.get('port', 8000)}"
 
+# Read version from VERSION file (repo root or next to .exe when frozen)
+def _read_version() -> str:
+    for candidate in [
+        Path(_cfg_path).parent / "VERSION",
+        Path(__file__).parent.parent / "VERSION",
+    ]:
+        if candidate.exists():
+            return candidate.read_text().strip()
+    return "1.0.0"
+
+_VERSION = _read_version()
+
 ollama    = OllamaClient(OLLAMA_URL)
 con       = init_db(DB_PATH)
 processor: TaskProcessor | None = None
@@ -114,7 +126,7 @@ async def lifespan(app: FastAPI):
     await ollama.close()
 
 
-app = FastAPI(title="IntelliChain Node", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="IntelliChain Node", version=_VERSION, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
@@ -162,7 +174,7 @@ async def health():
         "node": NODE_CFG["name"],
         "ollama": ollama_ok,
         "timestamp": time.time(),
-        "version": "1.0.0",
+        "version": _VERSION,
     }
 
 @app.get("/stats")
