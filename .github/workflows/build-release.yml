@@ -6,16 +6,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to build (e.g. v1.5.0)'
+        description: 'Release tag to build (e.g. v1.4.1)'
         required: true
-
-permissions:
-  contents: write
 
 jobs:
   build-windows:
     name: Windows x64
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,6 +52,8 @@ jobs:
   build-linux:
     name: Linux x64
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,6 +92,8 @@ jobs:
   build-macos:
     name: macOS ARM64
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
