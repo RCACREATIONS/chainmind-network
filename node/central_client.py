@@ -261,7 +261,17 @@ class CentralClient:
                 image_params = {}
             await self._run_image_job(job_id, prompt, model, image_params)
         elif job_type == "vision":
-            image_b64 = job.get("image_b64", "")
+            # Parse image_params → images[0] → data  (job.get("image_b64") key
+            # does not exist in the server response — the image lives inside
+            # the image_params JSON blob sent by chainmind.com.ng)
+            _img_raw = job.get("image_params")
+            try:
+                _img_params = json.loads(_img_raw) if _img_raw else {}
+            except Exception:
+                _img_params = {}
+            _images = _img_params.get("images", [])
+            _first  = _images[0] if _images else {}
+            image_b64 = _first.get("data", "") if isinstance(_first, dict) else (_first or "")
             await self._run_vision_job(job_id, prompt, model, image_b64)
         else:
             await self._run_job(job_id, prompt, model, system)
