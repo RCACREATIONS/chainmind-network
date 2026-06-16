@@ -1,16 +1,16 @@
 {
-  "version": "1.5.2",
-  "changelog": "https://github.com/RCACREATIONS/chainmind-network/releases/tag/v1.5.2",
+  "version": "1.5.3",
+  "changelog": "https://github.com/RCACREATIONS/chainmind-network/releases/tag/v1.5.3",
   "assets": {
-    "windows_x64":  "https://github.com/RCACREATIONS/chainmind-network/releases/download/v1.5.2/ChainMind-Node-windows-x64.exe",
-    "macos_arm64":  "https://github.com/RCACREATIONS/chainmind-network/releases/download/v1.5.2/ChainMind-Node-macos-arm64.zip",
-    "linux_x64":    "https://github.com/RCACREATIONS/chainmind-network/releases/download/v1.5.2/ChainMind-Node-linux-x64",
-    "source":       "https://github.com/RCACREATIONS/chainmind-network/archive/refs/tags/v1.5.2.zip"
+    "windows_x64":  "https://github.com/RCACREATIONS/chainmind-network/releases/download/v1.5.3/ChainMind-Node-windows-x64.exe",
+    "macos_arm64":  "https://github.com/RCACREATIONS/chainmind-network/releases/download/v1.5.3/ChainMind-Node-macos-arm64.zip",
+    "linux_x64":    "https://github.com/RCACREATIONS/chainmind-network/releases/download/v1.5.3/ChainMind-Node-linux-x64",
+    "source":       "https://github.com/RCACREATIONS/chainmind-network/archive/refs/tags/v1.5.3.zip"
   },
   "checksums": {
-    "windows_x64":  "97b6f31fa1ece783a86c62a97ec75e7183a4a3e14818defbf3fb0eaa8ea4cda3",
-    "macos_arm64":  "dea37704f9797e5a05166a053c9b0e3f6630887169c970c3eb551d1d0d9db093",
-    "linux_x64":    "de720422a715e04a0f6dd6bbc2a5e66fb962d5f24d03e52189c7807d5ff85369",
+    "windows_x64":  "",
+    "macos_arm64":  "",
+    "linux_x64":    "",
     "source":       ""
   }
 }
