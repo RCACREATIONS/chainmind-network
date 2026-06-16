@@ -190,7 +190,7 @@ class CentralClient:
     async def _poll_once(self):
         caps_parts = []
 
-        # image_gen capability
+        # image_gen / vision capability via dedicated imgenv (optional, heavyweight)
         try:
             from .image_gen import is_imgenv_ready as _ig_ready, _MODEL_DIR as _IG_MODEL_DIR, _MODEL_MAP as _IG_MAP
             if _ig_ready():
@@ -202,7 +202,6 @@ class CentralClient:
         except Exception:
             pass
 
-        # vision capability
         try:
             from .vision import is_visionenv_ready as _vis_ready, _MODEL_DIR as _VIS_MODEL_DIR
             from .vision import _GPU_MODEL_ID, _CPU_MODEL_ID
@@ -214,6 +213,23 @@ class CentralClient:
                         break
         except Exception:
             pass
+
+        # Fallback: detect Ollama-based vision/image_gen capability (llava, moondream, etc.)
+        # This covers nodes that have a vision model in Ollama but no dedicated imgenv.
+        if "image_gen" not in caps_parts or "vision" not in caps_parts:
+            try:
+                from .image_and_vision import detect_capabilities as _iav_detect
+                _iav_caps = await _iav_detect(self.ollama.base_url)
+                if _iav_caps.get("image_gen") and "image_gen" not in caps_parts:
+                    caps_parts.append("image_gen")
+                if _iav_caps.get("vision") and "vision" not in caps_parts:
+                    caps_parts.append("vision")
+            except Exception:
+                pass
+
+        # Always include file_qa so the node claims file Q&A jobs
+        if "file_qa" not in caps_parts:
+            caps_parts.append("file_qa")
 
         headers = {}
         if caps_parts:
@@ -355,73 +371,108 @@ class CentralClient:
             log.error(f"Failed to submit result for job {job_id[:8]}: {e}")
 
     async def _run_image_job(self, job_id: str, prompt: str, model: str | None, params: dict):
-        """Handle an image_gen job: generate image via imgenv, submit base64 to central server."""
-        start  = time.monotonic()
-        status = "error"
-        b64    = None
+        """Handle an image_gen job.
+
+        Priority order:
+        1. Dedicated imgenv (Stable Diffusion via diffusers) — if image_gen.py exists
+        2. Ollama-based LLaVA/vision model fallback via image_and_vision.py
+        """
+        start        = time.monotonic()
+        status       = "error"
+        result_text  = "Node error: image generation failed"
+        result_images: list[str] | None = None
 
         insert_task(self.con, job_id, prompt, "image_gen", routed_to="central")
 
         try:
-            from .image_gen import (
-                generate_image,
-                get_image_model_for_hw,
-                is_imgenv_ready,
-                is_model_downloaded,
-                _MODEL_MAP,
-            )
-            from .system_check import get_system_info
+            # ── Path 1: dedicated imgenv (Stable Diffusion) ───────────────
+            _used_imgenv = False
+            try:
+                from .image_gen import (
+                    generate_image,
+                    get_image_model_for_hw,
+                    is_imgenv_ready,
+                    is_model_downloaded,
+                )
+                from .system_check import get_system_info
 
-            if not is_imgenv_ready():
-                raise RuntimeError("Image generation venv not ready on this node.")
+                if is_imgenv_ready():
+                    if model:
+                        model_id = model
+                    else:
+                        hw       = get_system_info()
+                        model_id = get_image_model_for_hw(hw)[0]
 
-            # Determine which model to use
-            if model:
-                model_id = model
-            else:
-                hw       = get_system_info()
-                model_id = get_image_model_for_hw(hw)[0]
+                    if not is_model_downloaded(model_id):
+                        raise RuntimeError(f"SD model '{model_id}' not downloaded on this node.")
 
-            if not is_model_downloaded(model_id):
-                raise RuntimeError(f"Model '{model_id}' not downloaded on this node.")
+                    width           = int(params.get("width",  512))
+                    height          = int(params.get("height", 512))
+                    steps           = int(params.get("steps",  20))
+                    guidance_scale  = float(params.get("guidance_scale", 7.5))
+                    negative_prompt = params.get("negative_prompt", "")
+                    seed            = int(params.get("seed", -1))
 
-            width          = int(params.get("width",  512))
-            height         = int(params.get("height", 512))
-            steps          = int(params.get("steps",  20))
-            guidance_scale = float(params.get("guidance_scale", 7.5))
-            negative_prompt = params.get("negative_prompt", "")
-            seed           = int(params.get("seed", -1))
+                    b64 = await generate_image(
+                        prompt=prompt,
+                        model_id=model_id,
+                        negative_prompt=negative_prompt,
+                        width=width,
+                        height=height,
+                        steps=steps,
+                        guidance_scale=guidance_scale,
+                        seed=seed,
+                    )
 
-            b64 = await generate_image(
-                prompt=prompt,
-                model_id=model_id,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                steps=steps,
-                guidance_scale=guidance_scale,
-                seed=seed,
-            )
+                    if b64:
+                        status        = "done"
+                        result_text   = "[image_gen]"
+                        result_images = [b64]
+                        _used_imgenv  = True
+                        log.info(f"Image job {job_id[:8]}… done via SD — b64 length {len(b64)}")
+                    else:
+                        raise RuntimeError("SD image worker returned no output.")
+            except ImportError:
+                pass  # image_gen.py not installed — fall through to Ollama path
 
-            if b64:
-                status = "done"
-                log.info(f"Image job {job_id[:8]}… done — base64 length {len(b64)}")
-            else:
-                raise RuntimeError("Image worker returned no output.")
+            # ── Path 2: Ollama LLaVA / vision model fallback ─────────────
+            if not _used_imgenv:
+                from .image_and_vision import handle_special_job as _iav_handle, detect_capabilities as _iav_detect
+
+                ollama_base = self.ollama.base_url
+                caps = await _iav_detect(ollama_base)
+
+                # Build job dict matching image_and_vision's expected format
+                # Merge size from params (server sends "size" as "WxH")
+                merged_params = dict(params)
+                if "size" not in merged_params and ("width" in params or "height" in params):
+                    merged_params["size"] = f"{params.get('width',512)}x{params.get('height',512)}"
+
+                job_dict = {
+                    "job_type":     "image_gen",
+                    "prompt":       prompt,
+                    "model":        model or "auto",
+                    "image_params": json.dumps(merged_params),
+                }
+
+                outcome = await _iav_handle(job_dict, caps, ollama_base)
+                status      = outcome.get("status", "error")
+                result_text = outcome.get("result", "Image generation failed")
+                imgs        = outcome.get("result_images")
+                if imgs:
+                    result_images = imgs if isinstance(imgs, list) else [imgs]
+                log.info(f"Image job {job_id[:8]}… {status} via Ollama fallback")
 
         except Exception as e:
+            result_text = f"Node error: {e}"
             log.error(f"Image job {job_id[:8]}… failed: {e}")
 
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        _img_result = "[image_gen]" if status == "done" else "Node error: image generation failed"
         update_task(
-            self.con,
-            job_id,
-            status,
-            result=_img_result,
-            tokens_in=0,
-            tokens_out=0,
+            self.con, job_id, status,
+            result=result_text,
+            tokens_in=0, tokens_out=0,
             duration_ms=duration_ms,
         )
 
@@ -429,13 +480,13 @@ class CentralClient:
             payload: dict = {
                 "job_id":      job_id,
                 "status":      status,
-                "result":      "",
+                "result":      result_text,
                 "tokens_in":   0,
                 "tokens_out":  0,
                 "duration_ms": duration_ms,
             }
-            if b64:
-                payload["result_images"] = [b64]
+            if result_images:
+                payload["result_images"] = result_images
 
             r = await self._http.post(
                 f"{self.base_url}/api/node/submit-result.php",
@@ -460,7 +511,12 @@ class CentralClient:
             log.error(f"Failed to submit image result for job {job_id[:8]}: {e}")
 
     async def _run_vision_job(self, job_id: str, prompt: str, model: str | None, image_b64: str):
-        """Handle a vision job: understand the image with LLaVA/Moondream, submit text answer."""
+        """Handle a vision job.
+
+        Priority order:
+        1. Dedicated visionenv (Moondream/LLaVA via transformers) — if vision.py exists
+        2. Ollama-based LLaVA/vision model fallback via image_and_vision.py
+        """
         start  = time.monotonic()
         status = "error"
         answer = ""
@@ -468,42 +524,62 @@ class CentralClient:
         insert_task(self.con, job_id, prompt, "vision", routed_to="central")
 
         try:
-            from .vision import (
-                run_vision, is_visionenv_ready, is_model_downloaded,
-                get_vision_model_for_hw, _GPU_MODEL_ID, _CPU_MODEL_ID,
-            )
-            from .system_check import get_system_info
+            # ── Path 1: dedicated visionenv ───────────────────────────────
+            _used_visionenv = False
+            try:
+                from .vision import (
+                    run_vision, is_visionenv_ready, is_model_downloaded,
+                    _GPU_MODEL_ID, _CPU_MODEL_ID,
+                )
 
-            if not is_visionenv_ready():
-                raise RuntimeError("Vision venv not ready on this node.")
+                if is_visionenv_ready() and image_b64:
+                    if model and is_model_downloaded(model):
+                        model_id = model
+                    elif is_model_downloaded(_GPU_MODEL_ID):
+                        model_id = _GPU_MODEL_ID
+                    elif is_model_downloaded(_CPU_MODEL_ID):
+                        model_id = _CPU_MODEL_ID
+                    else:
+                        raise RuntimeError("No vision model downloaded on this node.")
 
-            if not image_b64:
-                raise RuntimeError("No image data provided in the vision job.")
+                    answer = await run_vision(
+                        prompt=prompt,
+                        image_b64=image_b64,
+                        model_id=model_id,
+                    )
 
-            # Pick model: use server-specified if available, otherwise best local one
-            if model and is_model_downloaded(model):
-                model_id = model
-            else:
-                hw = get_system_info()
-                gpu_id, cpu_id = _GPU_MODEL_ID, _CPU_MODEL_ID
-                if is_model_downloaded(gpu_id):
-                    model_id = gpu_id
-                elif is_model_downloaded(cpu_id):
-                    model_id = cpu_id
-                else:
-                    raise RuntimeError("No vision model downloaded on this node.")
+                    if answer:
+                        status = "done"
+                        _used_visionenv = True
+                        log.info(f"Vision job {job_id[:8]}… done via visionenv — {len(answer)} chars")
+                    else:
+                        raise RuntimeError("Vision worker returned no output.")
+            except ImportError:
+                pass  # vision.py not installed — fall through to Ollama path
 
-            answer = await run_vision(
-                prompt=prompt,
-                image_b64=image_b64,
-                model_id=model_id,
-            )
+            # ── Path 2: Ollama LLaVA / vision model fallback ─────────────
+            if not _used_visionenv:
+                from .image_and_vision import handle_special_job as _iav_handle, detect_capabilities as _iav_detect
 
-            if answer:
-                status = "done"
-                log.info(f"Vision job {job_id[:8]}… done — {len(answer)} chars")
-            else:
-                raise RuntimeError("Vision worker returned no output.")
+                ollama_base = self.ollama.base_url
+                caps = await _iav_detect(ollama_base)
+
+                # Build image_params JSON as image_and_vision expects
+                image_params_payload = {}
+                if image_b64:
+                    image_params_payload["images"] = [{"data": image_b64}]
+
+                job_dict = {
+                    "job_type":     "vision",
+                    "prompt":       prompt,
+                    "model":        model or caps.get("vision_model", "llava"),
+                    "image_params": json.dumps(image_params_payload),
+                }
+
+                outcome = await _iav_handle(job_dict, caps, ollama_base)
+                status  = outcome.get("status", "error")
+                answer  = outcome.get("result", "Vision processing failed")
+                log.info(f"Vision job {job_id[:8]}… {status} via Ollama fallback")
 
         except Exception as e:
             answer = f"Node error: {e}"
