@@ -427,7 +427,9 @@ def run_motion_ads_setup(verbose: bool = True) -> None:
     for pkg, mod in _import_map.items():
         try:
             __import__(mod)
-        except ImportError:
+        except Exception:
+            # Catch all exceptions — onnxruntime/rembg can raise OSError or
+            # RuntimeError (not just ImportError) on some platforms.
             missing.append(pkg)
 
     if not missing:
