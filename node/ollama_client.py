@@ -63,6 +63,11 @@ class OllamaClient:
             json=payload,
             timeout=300,
         )
+        if r.status_code == 404:
+            raise ValueError(
+                f"Model '{model}' is not pulled in your local Ollama. "
+                f"Pull it first: ollama pull {model}"
+            )
         r.raise_for_status()
         data = r.json()
         data["_duration_ms"] = int((time.monotonic() - start) * 1000)
@@ -79,6 +84,11 @@ class OllamaClient:
         async with self._http.stream(
             "POST", f"{self.base_url}/api/generate", json=payload
         ) as resp:
+            if resp.status_code == 404:
+                raise ValueError(
+                    f"Model '{model}' is not pulled in your local Ollama. "
+                    f"Pull it first: ollama pull {model}"
+                )
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if line.strip():
