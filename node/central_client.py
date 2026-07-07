@@ -19,15 +19,18 @@ def _detect_capabilities(base: list[str]) -> list[str]:
     """
     Start from the node's configured base capabilities and auto-extend
     with 'motion_ad' if the optional render dependencies are installed.
-    Nodes without rembg/moviepy/edge_tts simply never advertise motion_ad.
+    Called on every heartbeat so newly-installed deps take effect without a restart.
+    Catches all exceptions (not just ImportError) because onnxruntime and rembg
+    can raise OSError / RuntimeError when native libraries fail to load.
     """
     caps = list(base)
     try:
         import rembg, moviepy, edge_tts  # noqa: F401
         if "motion_ad" not in caps:
             caps.append("motion_ad")
-    except ImportError:
-        pass
+    except Exception:
+        # Remove motion_ad if deps are no longer available (e.g. after uninstall)
+        caps = [c for c in caps if c != "motion_ad"]
     return caps
 
 _IP_SERVICES = [
@@ -164,6 +167,12 @@ class CentralClient:
                 self._reputation = max(self._reputation, db_rep)
             except Exception:
                 pass  # fall through to in-memory values
+
+            # Re-detect capabilities on every heartbeat so deps installed (or removed)
+            # via the dashboard take effect immediately — no node restart required.
+            self.capabilities = _detect_capabilities(
+                self.node_cfg.get("capabilities", ["text"])
+            )
 
             models = await self.ollama.list_local_models()
             model_names = [m.get("name", "") for m in models]

@@ -1161,7 +1161,7 @@ elif page == "🎬 Motion Ads":
                         capture_output=True, text=True, timeout=300,
                     )
                     if _res.returncode == 0:
-                        st.success("✅ Installed! Restart the node to activate motion_ad capability.")
+                        st.success("✅ Installed! The node will advertise motion_ad capability on the next heartbeat (within 30 s) — no restart needed.")
                     else:
                         _err_line = (_res.stderr or _res.stdout or "unknown error").strip().split("\n")[-1]
                         st.error(f"pip failed: {_err_line}")

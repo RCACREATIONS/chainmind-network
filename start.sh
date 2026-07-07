@@ -1,89 +1,49 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# ChainMind startup — node server (with watchdog) + Streamlit dashboard
+
 set -e
 
-VENV_ACTIVATE=".venv/bin/activate"
+mkdir -p data/logs
 
-if [ ! -f "$VENV_ACTIVATE" ]; then
-    echo "Virtual environment not found. Run ./install.sh first."
-    exit 1
-fi
-source "$VENV_ACTIVATE"
+# ── Preflight: free ports if already occupied ─────────────────────────────────
+for PORT in 8000 5000; do
+  OLDPID=$(lsof -ti:"$PORT" 2>/dev/null || true)
+  if [ -n "$OLDPID" ]; then
+    echo "Port $PORT in use by PID $OLDPID — releasing..."
+    kill -9 "$OLDPID" 2>/dev/null || true
+    sleep 1
+  fi
+done
 
-OLLAMA_EXE=""
-if command -v ollama &>/dev/null; then
-    OLLAMA_EXE="ollama"
-fi
+# ── Cleanup on exit: kill all child jobs ─────────────────────────────────────
+cleanup() {
+  echo "Shutting down ChainMind..."
+  jobs -p | xargs kill 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+trap cleanup EXIT SIGINT SIGTERM
 
-CMD="${1:-help}"
-
-_start_ollama() {
-    if [ -n "$OLLAMA_EXE" ]; then
-        if ! pgrep -x ollama > /dev/null 2>&1; then
-            echo "Starting Ollama in background..."
-            "$OLLAMA_EXE" serve &>/dev/null &
-            sleep 2
-        fi
-    else
-        echo "[WARNING] Ollama not found. Install from https://ollama.ai/download"
-    fi
+# ── Node server watchdog: restart on crash ────────────────────────────────────
+node_watchdog() {
+  while true; do
+    echo "[node] Starting on port 8000..."
+    python -m uvicorn node.server:app --host 0.0.0.0 --port 8000 --log-level info
+    EC=$?
+    echo "[node] Exited (code $EC). Restarting in 5 s..."
+    sleep 5
+  done
 }
 
-case "$CMD" in
-    node)
-        python -m node.setup_wizard
-        echo "Starting ChainMind node..."
-        python -m node.cli node start
-        ;;
-    dashboard)
-        python -m node.cli dashboard
-        ;;
-    all)
-        python -m node.setup_wizard
-        echo "Starting node in background..."
-        python -m node.cli node start &
-        sleep 3
-        echo "Opening dashboard..."
-        python -m node.cli dashboard
-        ;;
-    status)
-        python -m node.cli node status
-        ;;
-    model)
-        shift
-        python -m node.cli model "$@"
-        ;;
-    network)
-        shift
-        python -m node.cli network "$@"
-        ;;
-    ask)
-        shift
-        python -m node.cli ask "$@"
-        ;;
-    leaderboard)
-        python -m node.cli leaderboard
-        ;;
-    *)
-        echo ""
-        echo "  ChainMind Network"
-        echo ""
-        echo "  Usage: ./start.sh <command> [options]"
-        echo ""
-        echo "  Node:"
-        echo "    node              Start the AI node server"
-        echo "    dashboard         Open the web dashboard"
-        echo "    all               Start node + dashboard together"
-        echo "    status            Show node status and stats"
-        echo ""
-        echo "  Models:"
-        echo "    model list        List installed models"
-        echo "    model catalog     Browse models by size"
-        echo "    model pull NAME   Download a model (e.g. tinyllama)"
-        echo "    model delete NAME Remove a model"
-        echo ""
-        echo "  Quick start:"
-        echo "    ./start.sh model pull tinyllama"
-        echo "    ./start.sh all"
-        echo ""
-        ;;
-esac
+node_watchdog &
+
+echo "Waiting for node server to start..."
+sleep 3
+
+# ── Dashboard: run in foreground (workflow alive while dashboard is up) ───────
+echo "Starting ChainMind dashboard on port 5000..."
+exec python -m streamlit run node/dashboard.py \
+  --server.port 5000 \
+  --server.address 0.0.0.0 \
+  --server.headless true \
+  --server.enableCORS false \
+  --server.enableXsrfProtection false
