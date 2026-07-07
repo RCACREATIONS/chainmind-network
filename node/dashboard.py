@@ -283,8 +283,8 @@ with st.sidebar:
     st.divider()
     page = st.radio("Navigation", [
         "🏠 Overview", "🖥 System", "🌐 Network", "🤖 Models",
-        "💬 Chat", "✅ Verify", "📋 Tasks", "🏆 Leaderboard",
-        "🗳 Governance", "💰 Billing & Account", "⚙️ Settings",
+        "💬 Chat", "✅ Verify", "📋 Tasks", "🎬 Motion Ads",
+        "🏆 Leaderboard", "🗳 Governance", "💰 Billing & Account", "⚙️ Settings",
     ], label_visibility="collapsed")
 
 def offline_banner():
@@ -1105,6 +1105,157 @@ elif page == "📋 Tasks":
             "<div class='cm-card' style='text-align:center;color:#6d28d9;padding:30px'>No tasks match.</div>",
             unsafe_allow_html=True,
         )
+
+# ════════════════════════════════════════════════════════
+elif page == "🎬 Motion Ads":
+    st.title("Motion Ads")
+    st.caption("Status of motion ad render jobs processed by this node.")
+
+    import importlib as _importlib
+    import subprocess as _subprocess
+
+    # ── Capability status card ────────────────────────────────────────────────
+    _dep_map = {
+        "rembg":       "rembg",
+        "onnxruntime": "onnxruntime",
+        "moviepy":     "moviepy",
+        "Pillow":      "PIL",
+        "edge-tts":    "edge_tts",
+    }
+    _dep_status: dict[str, bool] = {}
+    for _pkg, _mod in _dep_map.items():
+        try:
+            _importlib.import_module(_mod)
+            _dep_status[_pkg] = True
+        except ImportError:
+            _dep_status[_pkg] = False
+
+    _all_ok = all(_dep_status.values())
+    _missing_pkgs = [p for p, ok in _dep_status.items() if not ok]
+
+    _cap_color  = "#d1fae5" if _all_ok else "#fef3c7"
+    _cap_border = "#6ee7b7" if _all_ok else "#fde68a"
+    _cap_icon   = "✅" if _all_ok else "⚠️"
+    _cap_label  = "motion_ad capable" if _all_ok else f"missing: {', '.join(_missing_pkgs)}"
+
+    st.markdown(
+        f"<div class='cm-card' style='background:{_cap_color};border-color:{_cap_border};margin-bottom:8px'>"
+        f"<b style='font-size:15px'>{_cap_icon} Motion Ad Render Engine</b><br/>"
+        f"<span style='font-size:13px;color:#374151'>{_cap_label}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not _all_ok:
+        st.warning(
+            "Some render dependencies are missing. Click **Install Dependencies** to fix this. "
+            "The node will restart capability detection on next startup automatically."
+        )
+        if st.button("⬇️ Install Dependencies", type="primary"):
+            _install_pkgs = [p for p, ok in _dep_status.items() if not ok]
+            with st.spinner(f"Installing {', '.join(_install_pkgs)} via pip…"):
+                try:
+                    import sys as _sys_ma
+                    _res = _subprocess.run(
+                        [_sys_ma.executable, "-m", "pip", "install", "--quiet"] + _install_pkgs,
+                        capture_output=True, text=True, timeout=300,
+                    )
+                    if _res.returncode == 0:
+                        st.success("✅ Installed! Restart the node to activate motion_ad capability.")
+                    else:
+                        _err_line = (_res.stderr or _res.stdout or "unknown error").strip().split("\n")[-1]
+                        st.error(f"pip failed: {_err_line}")
+                except Exception as _e:
+                    st.error(f"Install error: {_e}")
+        st.divider()
+
+    # ── Dep status table ──────────────────────────────────────────────────────
+    with st.expander("Dependency Details", expanded=not _all_ok):
+        for _pkg, _ok in _dep_status.items():
+            _icon = "🟢" if _ok else "🔴"
+            st.markdown(f"{_icon} `{_pkg}`")
+
+    st.divider()
+
+    # ── Job list (filter /tasks for motion_ad jobs) ───────────────────────────
+    st.subheader("Render Jobs")
+    if not online:
+        offline_banner()
+    else:
+        _c1, _c2, _c3 = st.columns([2, 1, 1])
+        _limit    = _c1.slider("Show last N jobs", 10, 200, 50, key="ma_limit")
+        _filter   = _c2.selectbox("Status", ["all", "done", "error", "running", "pending"], key="ma_filter")
+        _c3.markdown("<br/>", unsafe_allow_html=True)
+        _refresh  = _c3.button("🔄 Refresh", key="ma_refresh")
+
+        if _refresh:
+            st.cache_data.clear()
+
+        _all_tasks = fetch(f"/tasks?limit={_limit * 5}") or []
+        _ma_tasks  = [t for t in _all_tasks if isinstance(t, dict) and t.get("job_type") == "motion_ad"]
+        if not _ma_tasks:
+            # Fallback: if job_type isn't in the local task record, show all tasks
+            # with model containing "motion" or result_video_url present
+            _ma_tasks = [
+                t for t in _all_tasks
+                if isinstance(t, dict) and (
+                    "motion" in str(t.get("model", "")).lower()
+                    or t.get("result_video_url")
+                )
+            ]
+
+        if _filter != "all":
+            _ma_tasks = [t for t in _ma_tasks if t.get("status") == _filter]
+
+        _total     = len(_ma_tasks)
+        _done_cnt  = sum(1 for t in _ma_tasks if t.get("status") == "done")
+        _err_cnt   = sum(1 for t in _ma_tasks if t.get("status") == "error")
+        _run_cnt   = sum(1 for t in _ma_tasks if t.get("status") in ("running", "claimed"))
+
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("Total", _total)
+        _m2.metric("Done",  _done_cnt)
+        _m3.metric("Errors", _err_cnt)
+        _m4.metric("In Progress", _run_cnt)
+
+        if _ma_tasks:
+            _df = _to_dataframe(_ma_tasks[:_limit])
+            if not _df.empty:
+                if "created_at" in _df.columns:
+                    _df["time"] = pd.to_datetime(_df["created_at"], unit="s", errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+                if "duration_ms" in _df.columns:
+                    _df["dur_s"] = (_df["duration_ms"] / 1000).round(1)
+                _sm = {"done": "✅ done", "error": "❌ error", "running": "⏳ running",
+                       "claimed": "⏳ rendering", "pending": "🕐 pending"}
+                if "status" in _df.columns:
+                    _df["status"] = _df["status"].map(lambda s: _sm.get(s, s))
+                _show_cols = [c for c in ["time", "status", "dur_s", "result_video_url", "tokens_in"] if c in _df.columns]
+                st.dataframe(_df[_show_cols], use_container_width=True, hide_index=True)
+
+                # Show video links for completed jobs
+                _video_jobs = [t for t in _ma_tasks if t.get("result_video_url")]
+                if _video_jobs:
+                    st.subheader("📹 Completed Videos")
+                    for _vj in _video_jobs[:10]:
+                        _url = _vj.get("result_video_url", "")
+                        _ts  = _vj.get("created_at", "")
+                        _jid = _vj.get("id", "")[:12]
+                        st.markdown(
+                            f"<div class='cm-card' style='padding:12px 16px'>"
+                            f"<b style='font-size:13px;color:#5b21b6'>Job {_jid}…</b> "
+                            f"<span style='color:#6b7280;font-size:12px'>{_ts}</span><br/>"
+                            f"<a href='{_url}' target='_blank' style='color:#7c3aed;font-weight:600'>"
+                            f"▶ Download / View MP4</a>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+        else:
+            st.markdown(
+                "<div class='cm-card' style='text-align:center;color:#6d28d9;padding:30px'>"
+                "No motion ad jobs found. Jobs appear here once this node claims and renders one."
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
 # ════════════════════════════════════════════════════════
 elif page == "🏆 Leaderboard":
