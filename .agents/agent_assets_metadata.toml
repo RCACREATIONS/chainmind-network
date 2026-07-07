@@ -6,3 +6,9 @@ id = "axhAPrw9YsEvjp4t7zeW3"
 uri = "file://chainmind.com.ng_motion_ads.zip"
 type = "unspecified"
 title = "chainmind.com.ng — Motion Ads Update (complete)"
+
+[[outputs]]
+id = "yBj0H7n44i5K9bHAHa4eE"
+uri = "file://_helpers_fixed.php"
+type = "unspecified"
+title = "_helpers_fixed.php — upload to /api/_helpers.php on your server"
