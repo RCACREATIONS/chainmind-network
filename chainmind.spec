@@ -54,12 +54,34 @@ try:
 except Exception:
     pystray_datas, pystray_binaries, pystray_hidden = [], [], []
 
+# ── Motion-ad render packages (rembg, onnxruntime, moviepy, edge-tts) ──────
+# Bundling these means users never need a separate pip-install step.
+try:
+    rembg_datas, rembg_binaries, rembg_hidden = collect_all("rembg")
+except Exception:
+    rembg_datas, rembg_binaries, rembg_hidden = [], [], []
+
+try:
+    ort_datas, ort_binaries, ort_hidden = collect_all("onnxruntime")
+except Exception:
+    ort_datas, ort_binaries, ort_hidden = [], [], []
+
+try:
+    moviepy_datas, moviepy_binaries, moviepy_hidden = collect_all("moviepy")
+except Exception:
+    moviepy_datas, moviepy_binaries, moviepy_hidden = [], [], []
+
+try:
+    edgetts_datas, edgetts_binaries, edgetts_hidden = collect_all("edge_tts")
+except Exception:
+    edgetts_datas, edgetts_binaries, edgetts_hidden = [], [], []
+
 block_cipher = None
 
 a = Analysis(
     ["chainmind_launcher.py"],
     pathex=["."],
-    binaries=[] + psutil_binaries + pystray_binaries,
+    binaries=[] + psutil_binaries + pystray_binaries + rembg_binaries + ort_binaries + moviepy_binaries + edgetts_binaries,
     datas=[
         (str(STREAMLIT_DIR / "static"),  "streamlit/static"),
         (str(STREAMLIT_DIR / "runtime"), "streamlit/runtime"),
@@ -70,7 +92,7 @@ a = Analysis(
         # Default config with full models catalog — copied to install dir on first run
         ("config.yaml",                  "."),
         ("VERSION",                      "."),
-    ] + metadata_datas + psutil_datas + pystray_datas,
+    ] + metadata_datas + psutil_datas + pystray_datas + rembg_datas + ort_datas + moviepy_datas + edgetts_datas,
     hiddenimports=[
         # ── psutil platform modules ───────────────────────────────────────
         "psutil",
@@ -119,7 +141,12 @@ a = Analysis(
         # ── Misc ─────────────────────────────────────────────────────────
         "importlib.metadata", "importlib_metadata", "pkg_resources",
         "requests", "attr", "attrs", "toolz", "jinja2", "jinja2.ext",
-    ] + psutil_hidden + pystray_hidden,
+        # ── Motion ad render ──────────────────────────────────────────────
+        "rembg", "onnxruntime", "moviepy", "moviepy.editor",
+        "moviepy.video", "moviepy.video.io", "moviepy.audio",
+        "edge_tts", "PIL", "PIL.Image", "PIL.ImageDraw",
+        "numpy", "scipy", "skimage",
+    ] + psutil_hidden + pystray_hidden + rembg_hidden + ort_hidden + moviepy_hidden + edgetts_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
