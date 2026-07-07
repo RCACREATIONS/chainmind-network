@@ -14,6 +14,22 @@ from .db import insert_task, update_task, get_stats
 
 log = logging.getLogger("central_client")
 
+
+def _detect_capabilities(base: list[str]) -> list[str]:
+    """
+    Start from the node's configured base capabilities and auto-extend
+    with 'motion_ad' if the optional render dependencies are installed.
+    Nodes without rembg/moviepy/edge_tts simply never advertise motion_ad.
+    """
+    caps = list(base)
+    try:
+        import rembg, moviepy, edge_tts  # noqa: F401
+        if "motion_ad" not in caps:
+            caps.append("motion_ad")
+    except ImportError:
+        pass
+    return caps
+
 _IP_SERVICES = [
     "https://api.ipify.org",
     "https://ifconfig.me/ip",
@@ -32,6 +48,7 @@ class CentralClient:
         self.hb_ivl       = self.central_cfg.get("heartbeat_interval", 30)
         self.node_cfg     = cfg.get("node", {})
         self.token_cfg    = cfg.get("tokens", {})
+        self.capabilities = _detect_capabilities(self.node_cfg.get("capabilities", ["text"]))
 
         self.node_id      = node_id
         self.node_name    = node_name
@@ -153,13 +170,14 @@ class CentralClient:
             tier = self._compute_tier()
             node_url = self.public_url or self._self_url()
             payload = {
-                "name":       self.node_name,
-                "url":        node_url,
-                "tier":       tier,
-                "models":     model_names,
-                "jobs_done":  self._jobs_done,
-                "iq_earned":  round(self._iq_earned, 6),
-                "reputation": round(self._reputation, 2),
+                "name":         self.node_name,
+                "url":          node_url,
+                "tier":         tier,
+                "models":       model_names,
+                "jobs_done":    self._jobs_done,
+                "iq_earned":    round(self._iq_earned, 6),
+                "reputation":   round(self._reputation, 2),
+                "capabilities": ",".join(self.capabilities),
             }
             r = await self._http.post(f"{self.base_url}/api/node/heartbeat.php", json=payload)
             if r.status_code == 200:
@@ -187,7 +205,10 @@ class CentralClient:
             await asyncio.sleep(self.poll_ivl)
 
     async def _poll_once(self):
-        r = await self._http.get(f"{self.base_url}/api/node/claim-job.php")
+        r = await self._http.get(
+            f"{self.base_url}/api/node/claim-job.php",
+            headers={"X-Node-Capabilities": ",".join(self.capabilities)},
+        )
 
         # ===== PATCH 1: CREDIT HANDLING =====
         if r.status_code == 402:
@@ -210,13 +231,80 @@ class CentralClient:
         if not job:
             return
 
-        job_id = job["id"]
-        prompt = job["prompt"]
-        model  = job.get("model") or None
-        system = job.get("system_prompt", "")
+        job_id   = job["id"]
+        job_type = job.get("job_type", "text")
 
-        log.info(f"Claimed job {job_id[:8]}… model={model or 'auto'}")
-        await self._run_job(job_id, prompt, model, system)
+        log.info(f"Claimed job {job_id[:8]}… type={job_type}")
+
+        if job_type == "motion_ad":
+            await self._run_motion_ad_job(job)
+        else:
+            # Existing text/image/vision path — completely unchanged
+            prompt = job.get("prompt", "")
+            model  = job.get("model") or None
+            system = job.get("system_prompt", "")
+            await self._run_job(job_id, prompt, model, system)
+
+    async def _run_motion_ad_job(self, job: dict):
+        """Process a motion_ad job: run the render pipeline and upload the video."""
+        from .motion_ads.pipeline import run_pipeline
+
+        job_id = job["id"]
+        try:
+            params = {}
+            raw_params = job.get("image_params")
+            if raw_params:
+                import json as _json
+                if isinstance(raw_params, str):
+                    params = _json.loads(raw_params)
+                elif isinstance(raw_params, dict):
+                    params = raw_params
+            params["job_id"] = job_id
+
+            # Validate required keys with clear error messages
+            if not params.get("business_name"):
+                raise ValueError("image_params.business_name is required for motion_ad jobs")
+            if not params.get("product"):
+                raise ValueError("image_params.product is required for motion_ad jobs")
+            params.setdefault("offer", "")
+
+            models = await self.ollama.list_local_models()
+            model = models[0]["name"] if models else "tinyllama"
+
+            output_path = await run_pipeline(self.ollama, model, params, user_image_paths=None)
+
+            with open(output_path, "rb") as f:
+                upload_resp = await self._http.post(
+                    f"{self.base_url}/api/node/submit-video.php",
+                    data={"job_id": job_id},
+                    files={"video": ("ad.mp4", f, "video/mp4")},
+                )
+            upload_resp.raise_for_status()
+            video_url = upload_resp.json().get("video_url", "")
+
+            await self._http.post(
+                f"{self.base_url}/api/node/submit-result.php",
+                json={
+                    "job_id":      job_id,
+                    "status":      "done",
+                    "result":      video_url,
+                    "tokens_in":   0,
+                    "tokens_out":  0,
+                    "duration_ms": 0,
+                },
+            )
+            self._jobs_done += 1
+            log.info(f"Motion ad job {job_id[:8]}… done → {video_url}")
+
+        except Exception as e:
+            log.error(f"Motion ad job {job_id[:8]}… failed: {e}")
+            try:
+                await self._http.post(
+                    f"{self.base_url}/api/node/submit-result.php",
+                    json={"job_id": job_id, "status": "error", "result": str(e)},
+                )
+            except Exception:
+                pass
 
     async def _run_job(self, job_id: str, prompt: str, model, system: str):
         start  = time.monotonic()

@@ -2,7 +2,8 @@ node:
   name: chainmind-node-1
   host: 0.0.0.0
   port: 8000
-  api_token: 
+  api_token:
+  capabilities: [text]   # auto-extended at runtime if motion_ads deps are installed
 network:
   heartbeat_interval: 30
   discovery_interval: 60
