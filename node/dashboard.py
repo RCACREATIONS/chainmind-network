@@ -1127,7 +1127,9 @@ elif page == "🎬 Motion Ads":
         try:
             _importlib.import_module(_mod)
             _dep_status[_pkg] = True
-        except ImportError:
+        except Exception:
+            # Catch all exceptions — onnxruntime/rembg can raise OSError or
+            # RuntimeError (not just ImportError) when native libs fail to load.
             _dep_status[_pkg] = False
 
     _all_ok = all(_dep_status.values())
@@ -1151,11 +1153,21 @@ elif page == "🎬 Motion Ads":
             "Some render dependencies are missing. Click **Install Dependencies** to fix this. "
             "The node will restart capability detection on next startup automatically."
         )
-        if st.button("⬇️ Install Dependencies", type="primary"):
+        import sys as _sys_ma
+        if getattr(_sys_ma, "frozen", False):
+            # Running as a PyInstaller binary — sys.executable IS the bundle,
+            # so pip install via it installs nowhere the binary can load from.
+            # v1.5.10+ bundles motion_ad deps; update to fix this permanently.
+            st.info(
+                "⚠️ You are running a bundled binary that was built without the motion_ad "
+                "render packages. **Please update to the latest version of ChainMind Node** — "
+                "v1.5.10+ includes rembg, moviepy, edge-tts, and onnxruntime pre-bundled so "
+                "they are always available on startup without a separate install step."
+            )
+        elif st.button("⬇️ Install Dependencies", type="primary"):
             _install_pkgs = [p for p, ok in _dep_status.items() if not ok]
             with st.spinner(f"Installing {', '.join(_install_pkgs)} via pip…"):
                 try:
-                    import sys as _sys_ma
                     _res = _subprocess.run(
                         [_sys_ma.executable, "-m", "pip", "install", "--quiet"] + _install_pkgs,
                         capture_output=True, text=True, timeout=300,
