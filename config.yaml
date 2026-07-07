@@ -13,7 +13,7 @@ ollama:
   host: http://localhost
   port: 11434
 dashboard:
-  port: 8501
+  port: 5000
 database:
   path: data/node.db
 tokens:

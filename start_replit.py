@@ -65,7 +65,7 @@ while True:
         processes[0] = server_proc
 
     if dashboard_proc.poll() is not None:
-        print("Dashboard exited.")
-        break
+        print("Dashboard exited — shutting down.")
+        cleanup()
 
     time.sleep(5)
