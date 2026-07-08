@@ -17,8 +17,22 @@ aiosqlite>=0.20
 rich
 typer[all]
 requests>=2.31
-# Motion ad generation (optional — install on nodes that will handle motion_ad jobs)
-rembg>=2.0.50
-onnxruntime>=1.16.0
-moviepy>=1.0.3
-edge-tts>=6.1.9
+aiosqlite
+altair
+cryptography
+fastapi
+httpx
+numpy
+pandas
+Pillow
+plotly
+psutil
+pyarrow
+pydantic
+pystray
+pyyaml
+requests
+rich
+streamlit
+typer[all]
+uvicorn[standard]

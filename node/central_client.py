@@ -17,20 +17,13 @@ log = logging.getLogger("central_client")
 
 def _detect_capabilities(base: list[str]) -> list[str]:
     """
-    Start from the node's configured base capabilities and auto-extend
-    with 'motion_ad' if the optional render dependencies are installed.
-    Called on every heartbeat so newly-installed deps take effect without a restart.
-    Catches all exceptions (not just ImportError) because onnxruntime and rembg
-    can raise OSError / RuntimeError when native libraries fail to load.
+    Start from the node's configured base capabilities and ensure the
+    'vision' capability is always present — vision is a compulsory
+    capability for every node and cannot be disabled.
     """
     caps = list(base)
-    try:
-        import rembg, moviepy, edge_tts  # noqa: F401
-        if "motion_ad" not in caps:
-            caps.append("motion_ad")
-    except Exception:
-        # Remove motion_ad if deps are no longer available (e.g. after uninstall)
-        caps = [c for c in caps if c != "motion_ad"]
+    if "vision" not in caps:
+        caps.append("vision")
     return caps
 
 _IP_SERVICES = [
@@ -241,83 +234,19 @@ class CentralClient:
             return
 
         job_id   = job["id"]
-        job_type = job.get("job_type", "text")
 
-        log.info(f"Claimed job {job_id[:8]}… type={job_type}")
+        log.info(f"Claimed job {job_id[:8]}…")
 
-        if job_type == "motion_ad":
-            await self._run_motion_ad_job(job)
-        else:
-            # Existing text/image/vision path — completely unchanged
-            prompt = job.get("prompt", "")
-            model  = job.get("model") or None
-            system = job.get("system_prompt", "")
-            await self._run_job(job_id, prompt, model, system)
-
-    async def _run_motion_ad_job(self, job: dict):
-        """Process a motion_ad job: run the render pipeline and upload the video."""
-        from .motion_ads.pipeline import run_pipeline
-
-        job_id = job["id"]
-        try:
-            params = {}
-            raw_params = job.get("image_params")
-            if raw_params:
-                import json as _json
-                if isinstance(raw_params, str):
-                    params = _json.loads(raw_params)
-                elif isinstance(raw_params, dict):
-                    params = raw_params
-            params["job_id"] = job_id
-
-            # Validate required keys with clear error messages
-            if not params.get("business_name"):
-                raise ValueError("image_params.business_name is required for motion_ad jobs")
-            if not params.get("product"):
-                raise ValueError("image_params.product is required for motion_ad jobs")
-            params.setdefault("offer", "")
-
-            model = await self._resolve_model(None)
-
-            output_path = await run_pipeline(self.ollama, model, params, user_image_paths=None)
-
-            with open(output_path, "rb") as f:
-                upload_resp = await self._http.post(
-                    f"{self.base_url}/api/node/submit-video.php",
-                    data={"job_id": job_id},
-                    files={"video": ("ad.mp4", f, "video/mp4")},
-                )
-            upload_resp.raise_for_status()
-            video_url = upload_resp.json().get("video_url", "")
-
-            await self._http.post(
-                f"{self.base_url}/api/node/submit-result.php",
-                json={
-                    "job_id":      job_id,
-                    "status":      "done",
-                    "result":      video_url,
-                    "tokens_in":   0,
-                    "tokens_out":  0,
-                    "duration_ms": 0,
-                },
-            )
-            self._jobs_done += 1
-            log.info(f"Motion ad job {job_id[:8]}… done → {video_url}")
-
-        except Exception as e:
-            log.error(f"Motion ad job {job_id[:8]}… failed: {e}")
-            try:
-                await self._http.post(
-                    f"{self.base_url}/api/node/submit-result.php",
-                    json={"job_id": job_id, "status": "error", "result": str(e)},
-                )
-            except Exception:
-                pass
+        # Text/image/vision path
+        prompt = job.get("prompt", "")
+        model  = job.get("model") or None
+        system = job.get("system_prompt", "")
+        await self._run_job(job_id, prompt, model, system)
 
     async def _resolve_model(self, preferred: str | None) -> str:
         """Delegates to OllamaClient.resolve_model — the single shared
-        fallback-resolution path used by job-queue jobs, motion-ad jobs,
-        and the live /ws/infer chat endpoint alike."""
+        fallback-resolution path used by job-queue jobs and the live
+        /ws/infer chat endpoint alike."""
         return await self.ollama.resolve_model(preferred)
 
     async def _run_job(self, job_id: str, prompt: str, model, system: str):

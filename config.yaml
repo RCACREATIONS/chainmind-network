@@ -3,7 +3,7 @@ node:
   host: 0.0.0.0
   port: 8000
   api_token:
-  capabilities: [text]   # auto-extended at runtime if motion_ads deps are installed
+  capabilities: [text, vision]   # vision is compulsory and always enabled
 network:
   heartbeat_interval: 30
   discovery_interval: 60

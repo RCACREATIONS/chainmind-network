@@ -341,9 +341,6 @@ def run_wizard(cfg: dict) -> dict:
     print()
     run_ollama_setup(cfg, verbose=True)
 
-    # ── Motion Ad Render Dependencies ────────────────────────────────────────
-    run_motion_ads_setup(verbose=True)
-
     return _print_summary(cfg)
 
 
@@ -396,75 +393,6 @@ def _print_summary(cfg: dict) -> dict:
     print()
     return cfg
 
-
-def run_motion_ads_setup(verbose: bool = True) -> None:
-    """
-    Install the motion ad render dependencies using pip.
-    Safe to call on every startup — pip is fast when packages are already installed.
-    Idempotent: has no side-effect if all packages are already present.
-    """
-    MOTION_AD_PKGS = [
-        "rembg",
-        "onnxruntime",
-        "moviepy",
-        "pillow",
-        "edge-tts",
-    ]
-
-    if verbose:
-        print()
-        print("══ Motion Ad Render Dependencies ══════════════")
-
-    # Quick check: if all packages are already importable, skip pip entirely
-    _import_map = {
-        "rembg": "rembg",
-        "onnxruntime": "onnxruntime",
-        "moviepy": "moviepy",
-        "pillow": "PIL",
-        "edge-tts": "edge_tts",
-    }
-    missing = []
-    for pkg, mod in _import_map.items():
-        try:
-            __import__(mod)
-        except Exception:
-            # Catch all exceptions — onnxruntime/rembg can raise OSError or
-            # RuntimeError (not just ImportError) on some platforms.
-            missing.append(pkg)
-
-    if not missing:
-        if verbose:
-            print("✅ All motion ad dependencies already installed.")
-            print()
-        return
-
-    if verbose:
-        print(f"   Installing: {', '.join(missing)}")
-        print("   This only happens once…")
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade"] + missing,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode == 0:
-            if verbose:
-                print("✅ Motion ad dependencies installed.")
-        else:
-            err = (result.stderr or result.stdout or "").strip().split("\n")[-1]
-            if verbose:
-                print(f"⚠  pip install had issues: {err}")
-                print("   The node will still start. Re-run the wizard to retry.")
-    except subprocess.TimeoutExpired:
-        if verbose:
-            print("⚠  pip install timed out. Check your internet connection.")
-    except Exception as exc:
-        if verbose:
-            print(f"⚠  Could not install motion ad dependencies: {exc}")
-    if verbose:
-        print()
 
 
 def run_ollama_setup(cfg: dict, verbose: bool = True) -> None:
@@ -544,12 +472,6 @@ def maybe_run_wizard() -> dict:
                 run_ollama_setup(cfg, verbose=True)
             except Exception as exc:
                 print(f"[Ollama] Bootstrap warning: {exc}")
-        # Always ensure motion ad render deps are present (idempotent pip install)
-        try:
-            run_motion_ads_setup(verbose=False)
-        except Exception as exc:
-            print(f"[MotionAds] Dependency bootstrap warning: {exc}")
-
     return cfg
 
 

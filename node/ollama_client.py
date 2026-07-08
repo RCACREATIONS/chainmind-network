@@ -46,7 +46,7 @@ class OllamaClient:
         Return the best model name to actually run with, given what's pulled locally.
 
         Single source of truth for model-fallback logic — used by every caller
-        (job-queue jobs, motion-ad jobs, and the live /ws/infer chat endpoint)
+        (job-queue jobs and the live /ws/infer chat endpoint)
         so none of them can silently skip it and hit a raw 404 again.
 
         Priority:
