@@ -13,6 +13,14 @@ import httpx
 log = logging.getLogger("ollama_client")
 
 
+def strip_latest_tag(name: str) -> str:
+    """Strip a trailing ':latest' tag — Ollama treats a bare model name as
+    implicitly tagged ':latest', so "tinyllama" and "tinyllama:latest" refer
+    to the same model. This is the single shared normalizer: use it anywhere
+    two model names need to be compared for equivalence."""
+    return name[: -len(":latest")] if name.endswith(":latest") else name
+
+
 class OllamaClient:
     def __init__(self, base_url: str = "http://localhost:11434"):
         self.base_url = base_url.rstrip("/")
@@ -52,17 +60,12 @@ class OllamaClient:
         models      = await self.list_local_models()
         local_names = [m.get("name", "") for m in models]
 
-        def _bare(name: str) -> str:
-            # Ollama treats a bare name as an implicit ":latest" tag, so
-            # "tinyllama" and "tinyllama:latest" must match in both directions.
-            return name[:-len(":latest")] if name.endswith(":latest") else name
-
         def _matches(name: str) -> str | None:
             if name in local_names:
                 return name
-            bare = _bare(name)
+            bare = strip_latest_tag(name)
             for local in local_names:
-                if _bare(local) == bare:
+                if strip_latest_tag(local) == bare:
                     return local
             return None
 

@@ -21,7 +21,7 @@ from .db import (
     upsert_peer, get_peers, get_online_peers, get_leaderboard,
     remove_peer,
 )
-from .ollama_client import OllamaClient
+from .ollama_client import OllamaClient, strip_latest_tag
 from .tasks import TaskProcessor
 from .peers import PeerManager, load_node_id
 from .orchestrator import Orchestrator
@@ -374,9 +374,7 @@ async def ws_infer(ws: WebSocket):
         model = await ollama.resolve_model(requested)
         # Only warn on a *real* fallback — not a ":latest" tag normalization
         # (e.g. requested "tinyllama" resolving to "tinyllama:latest").
-        requested_bare = requested.split(":")[0] if requested else None
-        model_bare     = model.split(":")[0] if model else None
-        if requested and requested_bare != model_bare:
+        if requested and strip_latest_tag(requested) != strip_latest_tag(model):
             await ws.send_text(json.dumps({
                 "notice": f"'{requested}' isn't pulled locally — using '{model}' instead. "
                           f"Run `ollama pull {requested}` to use it next time."
