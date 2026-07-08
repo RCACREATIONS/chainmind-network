@@ -61,8 +61,10 @@ class TaskProcessor:
                         self._queue.task_done()
                         continue
 
-                # Local inference
-                result = await self.ollama.generate(model=item["model"], prompt=item["prompt"])
+                # Local inference — resolve against what's actually pulled so an
+                # unpulled model falls back instead of raising a raw 404.
+                resolved_model = await self.ollama.resolve_model(item["model"])
+                result = await self.ollama.generate(model=resolved_model, prompt=item["prompt"])
                 update_task(
                     self.con, task_id, "done",
                     result=result.get("response", ""),

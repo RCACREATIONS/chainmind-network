@@ -372,7 +372,11 @@ async def ws_infer(ws: WebSocket):
         system     = data.get("system", "")
 
         model = await ollama.resolve_model(requested)
-        if requested and model != requested:
+        # Only warn on a *real* fallback — not a ":latest" tag normalization
+        # (e.g. requested "tinyllama" resolving to "tinyllama:latest").
+        requested_bare = requested.split(":")[0] if requested else None
+        model_bare     = model.split(":")[0] if model else None
+        if requested and requested_bare != model_bare:
             await ws.send_text(json.dumps({
                 "notice": f"'{requested}' isn't pulled locally — using '{model}' instead. "
                           f"Run `ollama pull {requested}` to use it next time."

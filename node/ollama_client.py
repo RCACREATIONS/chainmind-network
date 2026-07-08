@@ -52,18 +52,23 @@ class OllamaClient:
         models      = await self.list_local_models()
         local_names = [m.get("name", "") for m in models]
 
+        def _bare(name: str) -> str:
+            # Ollama treats a bare name as an implicit ":latest" tag, so
+            # "tinyllama" and "tinyllama:latest" must match in both directions.
+            return name[:-len(":latest")] if name.endswith(":latest") else name
+
         def _matches(name: str) -> str | None:
             if name in local_names:
                 return name
-            # Ollama treats a bare name as an implicit ":latest" tag.
-            if ":" not in name and f"{name}:latest" in local_names:
-                return f"{name}:latest"
+            bare = _bare(name)
+            for local in local_names:
+                if _bare(local) == bare:
+                    return local
             return None
 
-        if preferred:
-            exact = _matches(preferred)
-            if exact:
-                return exact
+        resolved_exact = _matches(preferred) if preferred else None
+        if resolved_exact:
+            return resolved_exact
 
         if preferred and local_names:
             fallback = local_names[0]
