@@ -366,12 +366,18 @@ async def gov_propose(req: ProposeRequest, _auth=Depends(require_auth)):
 async def ws_infer(ws: WebSocket):
     await ws.accept()
     try:
-        data   = json.loads(await ws.receive_text())
-        prompt = data.get("prompt", "")
-        model  = data.get("model") or (
-            (await ollama.list_local_models() or [{"name":"tinyllama"}])[0]["name"]
-        )
-        system = data.get("system", "")
+        data       = json.loads(await ws.receive_text())
+        prompt     = data.get("prompt", "")
+        requested  = data.get("model") or None
+        system     = data.get("system", "")
+
+        model = await ollama.resolve_model(requested)
+        if requested and model != requested:
+            await ws.send_text(json.dumps({
+                "notice": f"'{requested}' isn't pulled locally — using '{model}' instead. "
+                          f"Run `ollama pull {requested}` to use it next time."
+            }))
+
         async for chunk in ollama.generate_stream(model, prompt, system):
             await ws.send_text(json.dumps({"chunk": chunk}))
         await ws.send_text(json.dumps({"done": True}))

@@ -315,40 +315,10 @@ class CentralClient:
                 pass
 
     async def _resolve_model(self, preferred: str | None) -> str:
-        """
-        Return the best model to run a job with.
-
-        Priority:
-          1. preferred — if it exists locally, use it exactly.
-          2. First locally-pulled model — if preferred isn't pulled, log a warning
-             and fall back rather than failing the job.
-          3. "tinyllama" — if Ollama has nothing pulled at all (job will still fail
-             with a 404, but with a clear message telling the user to pull a model).
-        """
-        models     = await self.ollama.list_local_models()
-        local_names = [m.get("name", "") for m in models]
-
-        if preferred and preferred in local_names:
-            return preferred
-
-        if preferred and local_names:
-            fallback = local_names[0]
-            log.warning(
-                f"Requested model '{preferred}' is not pulled locally — "
-                f"falling back to '{fallback}'. "
-                f"Pull it anytime with:  ollama pull {preferred}"
-            )
-            return fallback
-
-        if local_names:
-            return local_names[0]
-
-        # Nothing pulled — return a sentinel; generate() will raise a clear ValueError.
-        log.error(
-            "No models are pulled in Ollama. "
-            "Pull at least one:  ollama pull tinyllama"
-        )
-        return preferred or "tinyllama"
+        """Delegates to OllamaClient.resolve_model — the single shared
+        fallback-resolution path used by job-queue jobs, motion-ad jobs,
+        and the live /ws/infer chat endpoint alike."""
+        return await self.ollama.resolve_model(preferred)
 
     async def _run_job(self, job_id: str, prompt: str, model, system: str):
         start  = time.monotonic()

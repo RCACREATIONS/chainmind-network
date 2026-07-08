@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import AsyncIterator
 
 import httpx
+
+log = logging.getLogger("ollama_client")
 
 
 class OllamaClient:
@@ -29,6 +32,56 @@ class OllamaClient:
             return r.json().get("models", [])
         except Exception:
             return []
+
+    async def resolve_model(self, preferred: str | None) -> str:
+        """
+        Return the best model name to actually run with, given what's pulled locally.
+
+        Single source of truth for model-fallback logic — used by every caller
+        (job-queue jobs, motion-ad jobs, and the live /ws/infer chat endpoint)
+        so none of them can silently skip it and hit a raw 404 again.
+
+        Priority:
+          1. preferred — if it exists locally (exact match, or matches ignoring an
+             implicit ":latest" tag), use it exactly.
+          2. First locally-pulled model — if preferred isn't pulled, log a warning
+             and fall back rather than failing the request.
+          3. "tinyllama" — if nothing is pulled at all (the request will still 404,
+             but generate()/generate_stream() will raise a clear message).
+        """
+        models      = await self.list_local_models()
+        local_names = [m.get("name", "") for m in models]
+
+        def _matches(name: str) -> str | None:
+            if name in local_names:
+                return name
+            # Ollama treats a bare name as an implicit ":latest" tag.
+            if ":" not in name and f"{name}:latest" in local_names:
+                return f"{name}:latest"
+            return None
+
+        if preferred:
+            exact = _matches(preferred)
+            if exact:
+                return exact
+
+        if preferred and local_names:
+            fallback = local_names[0]
+            log.warning(
+                f"Requested model '{preferred}' is not pulled locally — "
+                f"falling back to '{fallback}'. "
+                f"Pull it anytime with:  ollama pull {preferred}"
+            )
+            return fallback
+
+        if local_names:
+            return local_names[0]
+
+        log.error(
+            "No models are pulled in Ollama. "
+            "Pull at least one:  ollama pull tinyllama"
+        )
+        return preferred or "tinyllama"
 
     async def pull_model(self, model_name: str) -> AsyncIterator[dict]:
         """Stream pull progress events."""
